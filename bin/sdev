@@ -208,12 +208,20 @@ case "$CMD" in
     code)
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
-        if command -v zed >/dev/null 2>&1; then
+        # Prefer $VISUAL/$EDITOR, then common editor CLIs; fall back to printing the path.
+        if [[ -n "${VISUAL:-}" ]]; then
+            exec $VISUAL "$dir"
+        elif [[ -n "${EDITOR:-}" ]]; then
+            exec $EDITOR "$dir"
+        elif command -v zed >/dev/null 2>&1; then
             exec zed "$dir"
-        elif [[ -x /Applications/Zed.app/Contents/MacOS/cli ]]; then
-            exec /Applications/Zed.app/Contents/MacOS/cli "$dir"
+        elif command -v code >/dev/null 2>&1; then
+            exec code "$dir"
+        elif command -v cursor >/dev/null 2>&1; then
+            exec cursor "$dir"
         else
-            die "zed CLI not found on PATH and /Applications/Zed.app missing"
+            echo "No editor found. Set \$EDITOR/\$VISUAL, or open: $dir" >&2
+            echo "$dir"
         fi
         ;;
     use)
