@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat <<EOF
+Usage: ./bootstrap [--check] [--scaffold] [--path] [--dir <target>]
+
+With no flags: run --check, --scaffold (into this repo), and print PATH instructions.
+  --check         verify required tools (bash>=4, yq, docker) are installed
+  --scaffold      create core/projects.d, confs/, projects/ if missing (idempotent)
+  --dir <target>  scaffold into <target> instead of the repo dir
+  --path          print the line to add bin/ to your PATH
+EOF
+}
+
+check_deps() {
+    local ok=1
+    if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+        echo "✗ bash >= 4 required (found ${BASH_VERSION}). On macOS: brew install bash" >&2; ok=0
+    else echo "✓ bash ${BASH_VERSINFO[0]}"; fi
+    if command -v yq >/dev/null 2>&1; then echo "✓ yq ($(yq --version 2>/dev/null))"; else
+        echo "✗ yq not found. Install: brew install yq (or see https://github.com/mikefarah/yq)" >&2; ok=0; fi
+    if command -v docker >/dev/null 2>&1; then echo "✓ docker"; else
+        echo "✗ docker not found (needed for 'sdev up'). Install Docker/OrbStack." >&2; ok=0; fi
+    [[ $ok -eq 1 ]]
+}
+
+scaffold() {
+    local target="$1"
+    mkdir -p "$target/core/projects.d" "$target/confs" "$target/projects/_archive"
+    echo "✓ scaffolded core/projects.d, confs/, projects/ under $target"
+}
+
+print_path() {
+    echo "Add sdev to your PATH (e.g. in ~/.zshrc):"
+    echo "    export PATH=\"$REPO_DIR/bin:\$PATH\""
+}
+
+DO_CHECK=0; DO_SCAFFOLD=0; DO_PATH=0; TARGET="$REPO_DIR"; ANY=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check) DO_CHECK=1; ANY=1; shift ;;
+        --scaffold) DO_SCAFFOLD=1; ANY=1; shift ;;
+        --path) DO_PATH=1; ANY=1; shift ;;
+        --dir) TARGET="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown flag: $1" >&2; usage; exit 1 ;;
+    esac
+done
+
+if [[ $ANY -eq 0 ]]; then DO_CHECK=1; DO_SCAFFOLD=1; DO_PATH=1; fi
+
+rc=0
+[[ $DO_CHECK -eq 1 ]] && { check_deps || rc=1; }
+[[ $DO_SCAFFOLD -eq 1 ]] && scaffold "$TARGET"
+[[ $DO_PATH -eq 1 ]] && print_path
+exit $rc

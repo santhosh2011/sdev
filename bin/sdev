@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve script dir, following symlinks (so a personal alias symlink still works).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
+export WORKSPACE_ROOT
+
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+# ---- project pre-parse (before subcommand) ------------------------------------
+PROJECT_FLAG=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--project) [[ $# -ge 2 ]] || die "-p/--project requires a project name"; PROJECT_FLAG="$2"; shift 2 ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+set -- "${ARGS[@]:-}"
+[[ -z "${1:-}" ]] && set --   # normalize empty
+
+usage() {
+    cat <<EOF
+Usage: sdev [-p <project>] <command> [args…]
+       sdev <slug>                # shorthand for: sdev new <slug>
+
+Project:
+  use [<project>]                 pin active project for this terminal (no arg: show)
+  projects                        list defined projects
+  -p <project>                    override active project for one command
+
+Commands:
+  new <slug> [flags…]             create a new task workspace
+  up <slug> [extra…]              start the stack (docker-compose up -d)
+  down <slug>                     stop the stack (docker-compose down)
+  nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
+  end <slug> [flags…]             tear down + archive the task
+  ls | list                       list alive / archived / orphan tasks
+  ps <slug>                       compose ps for a task
+  logs <slug> [service…]          tail logs (-f); pass --no-follow to disable
+  shell <slug> [service]          exec sh in service (default: project's shell service)
+  open <slug>                     open http://localhost:<nginx-port>/ in browser
+  code <slug>                     open the task dir in Zed
+  cd <slug>                       print absolute task dir (use: cd "\$(sdev cd <slug>)")
+  help | -h | --help              show this help
+EOF
+}
+
+# Subcommand keywords (reserved — slugs cannot collide).
+is_reserved() {
+    case "$1" in
+        new|up|down|nuke|end|ls|list|ps|logs|shell|open|code|cd|use|projects|help|-h|--help) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+require_task_dir() {
+    local slug="$1"
+    [[ -n "$slug" ]] || die "slug required"
+    local ns="$WORKSPACE_ROOT/projects/$PROJECT/$slug"
+    [[ -d "$ns" ]] && { echo "$ns"; return; }
+    local flat="$WORKSPACE_ROOT/projects/$slug"
+    [[ -d "$flat" ]] && { echo "$flat"; return; }
+    die "task '$slug' not found in project '$PROJECT' (or legacy projects/$slug)"
+}
+
+# ---- dispatch -----------------------------------------------------------------
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+CMD="$1"; shift
+PROJECT="$(resolve_project "$PROJECT_FLAG")"
+
+# If first arg isn't a reserved keyword, treat as implicit `new <slug>`.
+if ! is_reserved "$CMD"; then
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
+fi
+
+case "$CMD" in
+    help|-h|--help)
+        usage
+        ;;
+    new)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$@"
+        ;;
+    end)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
+        ;;
+    ls|list)
+        # shellcheck disable=SC2086
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"}
+        ;;
+    up)
+        slug=""; profile_flag=""; assume_yes=0
+        extra=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --env) profile_flag="$2"; shift 2 ;;
+                --yes|-y) assume_yes=1; shift ;;
+                *) if [[ -z "$slug" ]]; then slug="$1"; else extra+=("$1"); fi; shift ;;
+            esac
+        done
+        dir="$(require_task_dir "$slug")"
+
+        # Optional switch: re-point app.env + rewrite APP_ENV.
+        if [[ -n "$profile_flag" ]]; then
+            is_valid_profile "$profile_flag" || die "invalid env profile '$profile_flag' (allowed: ${VALID_PROFILES[*]})"
+            ln -sf "$(profile_conf_file "$profile_flag" "$PROJECT")" "$dir/app.env"
+            if grep -qE '^APP_ENV=' "$dir/.env" 2>/dev/null; then
+                sed -i.bak -E "s/^APP_ENV=.*/APP_ENV=$profile_flag/" "$dir/.env" && rm -f "$dir/.env.bak"
+            else
+                echo "APP_ENV=$profile_flag" >> "$dir/.env"
+            fi
+        fi
+
+        profile="$(task_pinned_profile "$dir")"; profile="${profile:-local}"
+
+        # Staging guard: never implicit.
+        if [[ "$profile" == staging ]]; then
+            if [[ "$assume_yes" -eq 1 || "${SDEV_CONFIRM:-}" == staging ]]; then
+                log "staging confirmed (non-interactive)"
+            else
+                echo "⚠️  STAGING — this task targets your real staging environment." >&2
+                echo "    It can read/write REAL staging data." >&2
+                printf "    Type 'staging' to continue: " >&2
+                read -r ans || ans=""
+                [[ "$ans" == staging ]] || die "aborted (staging not confirmed)"
+            fi
+        fi
+
+        cd "$dir"
+        exec ./compose up -d "${extra[@]}"
+        ;;
+    down)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        cd "$dir"
+        exec ./compose down "$@"
+        ;;
+    nuke)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        cd "$dir"
+        exec ./compose down -v --remove-orphans
+        ;;
+    ps)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        cd "$dir"
+        exec ./compose ps "$@"
+        ;;
+    logs)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        follow=1
+        services=()
+        for arg in "$@"; do
+            if [[ "$arg" == "--no-follow" ]]; then
+                follow=0
+            else
+                services+=("$arg")
+            fi
+        done
+        cd "$dir"
+        if [[ $follow -eq 1 ]]; then
+            exec ./compose logs -f "${services[@]}"
+        else
+            exec ./compose logs "${services[@]}"
+        fi
+        ;;
+    shell)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        svc="${1:-$(config_shell_service "$PROJECT")}"
+        cd "$dir"
+        exec ./compose exec -it "$svc" sh
+        ;;
+    open)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        env_file="$dir/.env"
+        [[ -f "$env_file" ]] || die "$env_file not found"
+        port="$(grep '^NGINX_HOST_PORT=' "$env_file" | cut -d= -f2 || true)"
+        [[ -n "$port" ]] || die "NGINX_HOST_PORT not set in $env_file"
+        url="http://localhost:$port/"
+        if command -v open >/dev/null 2>&1; then
+            open "$url"
+        else
+            echo "$url"
+        fi
+        ;;
+    cd)
+        slug="${1:-}"; shift || true
+        require_task_dir "$slug"
+        ;;
+    code)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        if command -v zed >/dev/null 2>&1; then
+            exec zed "$dir"
+        elif [[ -x /Applications/Zed.app/Contents/MacOS/cli ]]; then
+            exec /Applications/Zed.app/Contents/MacOS/cli "$dir"
+        else
+            die "zed CLI not found on PATH and /Applications/Zed.app missing"
+        fi
+        ;;
+    use)
+        target="${1:-}"
+        if [[ -z "$target" ]]; then
+            cur="$(resolve_project "")"
+            echo "active project: $cur (session: $(session_key))"
+            exit 0
+        fi
+        target="$(require_project "$target")"
+        mkdir -p "$(session_project_dir)"
+        printf '%s\n' "$target" > "$(session_project_pointer)"
+        log "pinned project '$target' for this terminal"
+        ;;
+    projects)
+        printf "%-16s %-8s %-8s\n" PROJECT TASKS RUNNING
+        for p in $(config_projects); do
+            n=0
+            shopt -s nullglob
+            for d in "$WORKSPACE_ROOT"/projects/"$p"/*/; do
+                [[ -f "$d/.env" ]] && n=$((n+1))
+            done
+            printf "%-16s %-8s %-8s\n" "$p" "$n" "-"
+        done
+        ;;
+    *)
+        usage
+        die "unknown command: $CMD"
+        ;;
+esac

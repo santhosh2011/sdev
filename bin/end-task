@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
+export WORKSPACE_ROOT
+
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
+
+usage() {
+    cat <<EOF
+Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>]
+
+Tears down a task: stops docker, removes worktrees, deletes branches, archives knowledge.
+EOF
+}
+
+SLUG=""; FORCE=0; KEEP_BRANCH=0; MERGE_TARGET="origin/qa"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --force) FORCE=1; shift ;;
+        --keep-branch) KEEP_BRANCH=1; shift ;;
+        --merge-target) MERGE_TARGET="$2"; shift 2 ;;
+        *) [[ -z "$SLUG" ]] && SLUG="$1" || die "unexpected arg: $1"; shift ;;
+    esac
+done
+
+[[ -n "$SLUG" ]] || { usage; die "slug required"; }
+TASK_DIR="$WORKSPACE_ROOT/projects/$PROJECT/$SLUG"
+if [[ ! -d "$TASK_DIR" ]]; then
+    if [[ -d "$WORKSPACE_ROOT/projects/$SLUG" ]]; then
+        TASK_DIR="$WORKSPACE_ROOT/projects/$SLUG"
+    else
+        die "task '$SLUG' not found in project '$PROJECT'"
+    fi
+fi
+
+# Pre-flight (skip if --force)
+if [[ $FORCE -eq 0 ]]; then
+    for repo in "$TASK_DIR"/*/; do
+        repo_name="$(basename "$repo")"
+        [[ -d "$repo/.git" || -f "$repo/.git" ]] || continue
+        # Branch merged into target?
+        if ! git -C "$repo" branch -r --contains "task/$SLUG" 2>/dev/null | grep -qE "^\s*$MERGE_TARGET\$"; then
+            die "$repo_name: branch task/$SLUG not in $MERGE_TARGET — pass --force to override"
+        fi
+        # Clean tree?
+        if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+            die "$repo_name: working tree dirty — pass --force to override"
+        fi
+    done
+    # Running containers?
+    cpn="$(grep '^COMPOSE_PROJECT_NAME=' "$TASK_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "$SLUG")"
+    running="$(docker ps --filter "label=com.docker.compose.project=$cpn" -q 2>/dev/null || true)"
+    if [[ -n "$running" ]]; then
+        die "containers still running for project $cpn — stop them or pass --force"
+    fi
+fi
+
+# Tear down docker
+if [[ -x "$TASK_DIR/compose" ]]; then
+    ( cd "$TASK_DIR" && ./compose down -v --remove-orphans 2>/dev/null || true )
+fi
+
+# Collect repos with worktrees
+declare -a TASK_REPOS=()
+while read -r r; do
+    p="$(config_repo_path "$PROJECT" "$r")"
+    [[ -d "$TASK_DIR/$p" ]] && TASK_REPOS+=("$p")
+done < <(config_repos "$PROJECT")
+
+# Final SHAs
+declare -A FINAL_SHAS=()
+for p in "${TASK_REPOS[@]}"; do
+    FINAL_SHAS[$p]="$(git -C "$TASK_DIR/$p" rev-parse HEAD 2>/dev/null || echo unknown)"
+done
+
+# Remove worktrees + branches
+for p in "${TASK_REPOS[@]}"; do
+    src="$(repo_source_dir "$PROJECT" "$p")"
+    git -C "$src" worktree remove --force "$TASK_DIR/$p" 2>/dev/null || true
+    if [[ $KEEP_BRANCH -eq 0 ]]; then
+        git -C "$src" branch -D "task/$SLUG" 2>/dev/null || true
+    fi
+done
+
+# Soft archive
+ARCHIVE="$WORKSPACE_ROOT/projects/_archive/$PROJECT/$SLUG"
+mkdir -p "$ARCHIVE"
+for item in knowledge CLAUDE.md .claude .env docker-compose.yml compose nginx.conf; do
+    [[ -e "$TASK_DIR/$item" ]] && mv "$TASK_DIR/$item" "$ARCHIVE/" || true
+done
+
+offset="$(grep '^PORT_OFFSET=' "$ARCHIVE/.env" 2>/dev/null | cut -d= -f2 || echo unknown)"
+{
+    echo "# Archive: $SLUG"
+    echo ""
+    echo "- archive_date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "- merge_target: $MERGE_TARGET"
+    echo "- port_offset_freed: $offset"
+    echo ""
+    echo "## Final commits"
+    for p in "${TASK_REPOS[@]}"; do
+        echo "- $p: ${FINAL_SHAS[$p]} (branch task/$SLUG)"
+    done
+} > "$ARCHIVE/ARCHIVE_INFO.md"
+
+rm -rf "$TASK_DIR"
+log "archived to projects/_archive/$PROJECT/$SLUG"

@@ -1,0 +1,31 @@
+# Example project registry. Copy to <yourproject>.yml and edit.
+# Select it per-command with `sdev -p <yourproject> ...` or pin a terminal
+# with `sdev use <yourproject>`.
+
+# Env-profile conf prefix -> confs/<project>/<conf_prefix>.<profile>.env
+conf_prefix: app
+
+# Service to exec into for `sdev shell` (a compose service name).
+default_shell_service: api
+
+# OPTIONAL: a project-specific compose template (relative to repo root).
+# Omit to use the default bin/templates/docker-compose.yml.tmpl.
+# template: core/example/docker-compose.tmpl
+
+# OPTIONAL: host-exposed services that get a port offset. Omit to inherit
+# the global stack_services.
+# stack_services: [nginx, api, ui, db, redis]
+
+# Repos worktreed into each task. `path` is relative to core/<project>/<path>
+# (the worktree source), falling back to core/<path>.
+repos:
+  api:
+    path: my-api-repo
+    default_base: main
+    compose_role: api
+    link_node_modules: false
+  web:
+    path: my-web-repo
+    default_base: main
+    compose_role: ui
+    link_node_modules: true

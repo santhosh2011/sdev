@@ -1,0 +1,8 @@
+# Users' live task workspaces and secrets are never committed.
+/projects/
+# GSD/agent session artifacts (not part of the package).
+/.planning/
+**/*.env
+!**/*.env.example
+.DS_Store
+*.bak

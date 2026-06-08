@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "$0")"
+
+# Ensure OrbStack's docker binaries are reachable even from non-interactive shells.
+if [[ -x "$HOME/.orbstack/bin/docker-compose" ]] && ! command -v docker-compose >/dev/null 2>&1; then
+    export PATH="$HOME/.orbstack/bin:$PATH"
+fi
+
+# OrbStack provides `docker-compose` (with dash) at v5+, not the `docker compose`
+# subcommand. Prefer the dashed form; fall back to subcommand if available.
+if command -v docker-compose >/dev/null 2>&1; then
+    exec docker-compose --env-file .env "$@"
+else
+    exec docker compose --env-file .env "$@"
+fi

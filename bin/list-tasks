@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
+export WORKSPACE_ROOT
+
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+SCOPE_PROJECT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --project) SCOPE_PROJECT="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+echo "=== Alive tasks ==="
+shopt -s nullglob
+found=0
+print_task() {
+    local label="$1" env="$2"
+    local nginx_port offset running status cpn
+    nginx_port="$(grep '^NGINX_HOST_PORT=' "$env" | cut -d= -f2 || echo '-')"
+    offset="$(grep '^PORT_OFFSET=' "$env" | cut -d= -f2 || echo '-')"
+    cpn="$(grep '^COMPOSE_PROJECT_NAME=' "$env" | cut -d= -f2 || echo "$label")"
+    running="$({ docker ps --filter "label=com.docker.compose.project=$cpn" -q 2>/dev/null || true; } | wc -l | tr -d ' ')"
+    status="stopped"; [[ "${running:-0}" -gt 0 ]] && status="running ($running containers)"
+    printf "  %-28s offset=%-3s nginx=http://localhost:%-5s [%s]\n" "$label" "$offset" "${nginx_port:-N/A}" "$status"
+}
+for pdir in "$WORKSPACE_ROOT"/projects/*/; do
+    name="$(basename "$pdir")"
+    [[ "$name" == "_archive" ]] && continue
+    if [[ -f "$pdir/.env" ]]; then
+        # legacy flat task (treated as the implicit 'default' project)
+        [[ -n "$SCOPE_PROJECT" && "$SCOPE_PROJECT" != "default" ]] && continue
+        found=1; print_task "$name (legacy)" "$pdir/.env"
+        continue
+    fi
+    # namespaced project dir
+    [[ -n "$SCOPE_PROJECT" && "$SCOPE_PROJECT" != "$name" ]] && continue
+    for tdir in "$pdir"*/; do
+        [[ -f "$tdir/.env" ]] || continue
+        found=1; print_task "$name/$(basename "$tdir")" "$tdir/.env"
+    done
+done
+[[ $found -eq 0 ]] && echo "  (none)"
+
+echo
+echo "=== Archived tasks ==="
+found=0
+print_archived() {
+    local label="$1" dir="$2"
+    local date
+    date="$(grep '^- archive_date:' "$dir/ARCHIVE_INFO.md" 2>/dev/null | cut -d: -f2- | xargs || echo '-')"
+    printf "  %-28s archived %s\n" "$label" "$date"
+}
+for adir in "$WORKSPACE_ROOT"/projects/_archive/*/; do
+    name="$(basename "$adir")"
+    if [[ -f "$adir/ARCHIVE_INFO.md" ]]; then
+        found=1; print_archived "$name (legacy)" "$adir"
+        continue
+    fi
+    for tdir in "$adir"*/; do
+        [[ -d "$tdir" ]] || continue
+        found=1; print_archived "$name/$(basename "$tdir")" "$tdir"
+    done
+done
+[[ $found -eq 0 ]] && echo "  (none)"
+
+echo
+echo "=== Orphan docker volumes ==="
+known=$(ls -1 "$WORKSPACE_ROOT/projects/" "$WORKSPACE_ROOT/projects/_archive/" 2>/dev/null | sort -u | grep -v '^_archive$' || true)
+orphans=0
+while read -r vol; do
+    [[ -z "$vol" ]] && continue
+    proj="${vol%%_*}"
+    if ! grep -qx "$proj" <<< "$known"; then
+        echo "  $vol"
+        orphans=$((orphans+1))
+    fi
+done < <(docker volume ls --format '{{.Name}}' 2>/dev/null || true)
+if [[ $orphans -eq 0 ]]; then echo "  (none)"; fi

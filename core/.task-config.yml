@@ -1,0 +1,30 @@
+# Global defaults for sdev. Per-project overrides live in core/projects.d/<name>.yml.
+# `repos` here is the fallback registry used by the implicit `default` project
+# (when no core/projects.d/default.yml exists). Replace with your own repos.
+repos:
+  api:
+    path: api
+    default_base: main
+    compose_role: api
+  web:
+    path: web
+    default_base: main
+    compose_role: ui
+
+stack_services:
+  - nginx
+  - api
+  - ui
+  - db
+  - redis
+
+defaults:
+  default_env: local
+  default_project: default
+  port_step: 10
+  base_ports:
+    nginx: 8080
+    api:   8000
+    ui:    5173
+    db:    5432
+    redis: 6379

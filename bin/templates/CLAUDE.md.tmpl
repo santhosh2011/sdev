@@ -1,0 +1,33 @@
+# Task: __SLUG__  (project: __PROJECT__)
+
+**Environment profile:** `__APP_ENV__`
+
+**Scope**: (one-line — fill in)
+
+## Branches
+- worktrees created on `task/__SLUG__` for each repo in this task
+
+## Primary URL (this task)
+- **http://localhost:__NGINX_HOST_PORT__/** ← (if this stack has nginx) / → UI, /api → backend
+
+## Direct debug ports
+- API:   http://localhost:__API_HOST_PORT__
+- UI:    http://localhost:__UI_HOST_PORT__
+- DB:    localhost:__DB_HOST_PORT__
+- Redis: localhost:__REDIS_HOST_PORT__
+
+## Running the stack
+Pin the project first (`sdev use __PROJECT__`), or pass `-p __PROJECT__` to each command.
+```
+sdev up __SLUG__        # start (detached)
+sdev logs __SLUG__      # tail all service logs
+sdev ps __SLUG__        # status
+sdev open __SLUG__      # open http://localhost:__NGINX_HOST_PORT__/ in browser
+sdev shell __SLUG__     # exec sh in the project's default service
+sdev down __SLUG__      # stop (volumes kept)
+sdev nuke __SLUG__      # stop + reclaim volumes
+sdev end __SLUG__       # archive when done
+```
+
+## Task knowledge
+Notes for THIS task → ./knowledge/
