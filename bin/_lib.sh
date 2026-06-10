@@ -2,11 +2,34 @@
 # Shared helpers for new-task / end-task / list-tasks.
 # Source this, don't execute.
 
-: "${WORKSPACE_ROOT:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-GLOBAL_CONFIG="$WORKSPACE_ROOT/core/.task-config.yml"
+# --- root resolution ----------------------------------------------------------
+# SDEV_INSTALL: where the tool code lives (this lib's parent dir).
+SDEV_INSTALL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# SDEV_HOME: user-data root. Precedence:
+#   1. explicit $SDEV_HOME
+#   2. $WORKSPACE_ROOT  (legacy alias: combined tool+data root; tests & pre-migration clones)
+#   3. ~/.sdev
+if [[ -n "${SDEV_HOME:-}" ]]; then
+    :
+elif [[ -n "${WORKSPACE_ROOT:-}" ]]; then
+    SDEV_HOME="$WORKSPACE_ROOT"
+else
+    SDEV_HOME="$HOME/.sdev"
+fi
+export SDEV_INSTALL SDEV_HOME
+
+GLOBAL_CONFIG="$SDEV_HOME/core/.task-config.yml"
 # shellcheck disable=SC2034  # used by sourcing scripts and future tasks
-LOCAL_CONFIG="$WORKSPACE_ROOT/core/.task-config.local.yml"
-PROJECTS_DIR="$WORKSPACE_ROOT/core/projects.d"
+LOCAL_CONFIG="$SDEV_HOME/core/.task-config.local.yml"
+PROJECTS_DIR="$SDEV_HOME/core/projects.d"
+
+# Create the SDEV_HOME skeleton and seed the default config if absent. Idempotent.
+ensure_home() {
+    mkdir -p "$SDEV_HOME/core/projects.d" "$SDEV_HOME/confs" "$SDEV_HOME/projects/_archive"
+    if [[ ! -f "$GLOBAL_CONFIG" && -f "$SDEV_INSTALL/core/.task-config.yml" ]]; then
+        cp "$SDEV_INSTALL/core/.task-config.yml" "$GLOBAL_CONFIG"
+    fi
+}
 
 # Path to a project's registry file (may not exist).
 project_config_file() { echo "$PROJECTS_DIR/$1.yml"; }
@@ -78,13 +101,13 @@ config_base_port() {   # $1=project $2=service
     yq -r ".defaults.base_ports.\"$2\"" "$GLOBAL_CONFIG"
 }
 
-# Compose template path: project override (relative to WORKSPACE_ROOT) or default.
+# Compose template path: project override (relative to SDEV_HOME) or default.
 config_template() {   # $1=project
     local v; v="$(yq -r '.template // ""' "$(effective_project_file "$1")")"
     if [[ -n "$v" && "$v" != "null" ]]; then
-        echo "$WORKSPACE_ROOT/$v"
+        echo "$SDEV_HOME/$v"
     else
-        echo "$WORKSPACE_ROOT/bin/templates/docker-compose.yml.tmpl"
+        echo "$SDEV_INSTALL/bin/templates/docker-compose.yml.tmpl"
     fi
 }
 
@@ -155,27 +178,26 @@ is_valid_profile() {
 profile_conf_file() {   # $1=profile $2=project
     local prefix pdir
     prefix="$(config_conf_prefix "$2")"
-    pdir="$WORKSPACE_ROOT/confs/$2"
+    pdir="$SDEV_HOME/confs/$2"
     if [[ -d "$pdir" ]]; then
         echo "$pdir/$prefix.$1.env"
     else
-        echo "$WORKSPACE_ROOT/confs/$prefix.$1.env"   # legacy flat confs/
+        echo "$SDEV_HOME/confs/$prefix.$1.env"   # legacy flat confs/
     fi
 }
 
 # Worktree source directory for a repo: core/<project>/<path>, else legacy core/<path>.
 repo_source_dir() {   # $1=project $2=repo_path
-    local ns="$WORKSPACE_ROOT/core/$1/$2"
+    local ns="$SDEV_HOME/core/$1/$2"
     [[ -d "$ns" ]] && { echo "$ns"; return; }
-    echo "$WORKSPACE_ROOT/core/$2"
+    echo "$SDEV_HOME/core/$2"
 }
 
 # Personal override (gitignored) wins over committed default; fall back to "local".
 config_default_env() {
-    local local_cfg="$WORKSPACE_ROOT/core/.task-config.local.yml"
     local val
-    if [[ -f "$local_cfg" ]]; then
-        val="$(yq -r '.defaults.default_env // ""' "$local_cfg" 2>/dev/null)"
+    if [[ -f "$LOCAL_CONFIG" ]]; then
+        val="$(yq -r '.defaults.default_env // ""' "$LOCAL_CONFIG" 2>/dev/null)"
         [[ -n "$val" && "$val" != "null" ]] && { echo "$val"; return; }
     fi
     val="$(yq -r '.defaults.default_env // ""' "$GLOBAL_CONFIG" 2>/dev/null)"
@@ -210,7 +232,7 @@ compute_next_offset() {
     while IFS= read -r env; do
         local o; o="$(grep -E '^PORT_OFFSET=' "$env" | cut -d= -f2)"
         [[ -n "$o" ]] && used+=("$o")
-    done < <(find "$WORKSPACE_ROOT/projects" -type f -name .env 2>/dev/null)
+    done < <(find "$SDEV_HOME/projects" -type f -name .env 2>/dev/null)
     local candidate=$step
     while printf '%s\n' "${used[@]}" | grep -qx "$candidate"; do
         candidate=$((candidate + step))
