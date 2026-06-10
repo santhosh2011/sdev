@@ -2,8 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
-export WORKSPACE_ROOT
 
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
@@ -29,7 +27,7 @@ print_task() {
     status="stopped"; [[ "${running:-0}" -gt 0 ]] && status="running ($running containers)"
     printf "  %-28s offset=%-3s nginx=http://localhost:%-5s [%s]\n" "$label" "$offset" "${nginx_port:-N/A}" "$status"
 }
-for pdir in "$WORKSPACE_ROOT"/projects/*/; do
+for pdir in "$SDEV_HOME"/projects/*/; do
     name="$(basename "$pdir")"
     [[ "$name" == "_archive" ]] && continue
     if [[ -f "$pdir/.env" ]]; then
@@ -56,7 +54,7 @@ print_archived() {
     date="$(grep '^- archive_date:' "$dir/ARCHIVE_INFO.md" 2>/dev/null | cut -d: -f2- | xargs || echo '-')"
     printf "  %-28s archived %s\n" "$label" "$date"
 }
-for adir in "$WORKSPACE_ROOT"/projects/_archive/*/; do
+for adir in "$SDEV_HOME"/projects/_archive/*/; do
     name="$(basename "$adir")"
     if [[ -f "$adir/ARCHIVE_INFO.md" ]]; then
         found=1; print_archived "$name (legacy)" "$adir"
@@ -71,7 +69,7 @@ done
 
 echo
 echo "=== Orphan docker volumes ==="
-known=$(ls -1 "$WORKSPACE_ROOT/projects/" "$WORKSPACE_ROOT/projects/_archive/" 2>/dev/null | sort -u | grep -v '^_archive$' || true)
+known=$(ls -1 "$SDEV_HOME/projects/" "$SDEV_HOME/projects/_archive/" 2>/dev/null | sort -u | grep -v '^_archive$' || true)
 orphans=0
 while read -r vol; do
     [[ -z "$vol" ]] && continue

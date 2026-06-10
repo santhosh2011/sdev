@@ -10,9 +10,6 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 
-: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
-export WORKSPACE_ROOT
-
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
 
@@ -66,9 +63,9 @@ is_reserved() {
 require_task_dir() {
     local slug="$1"
     [[ -n "$slug" ]] || die "slug required"
-    local ns="$WORKSPACE_ROOT/projects/$PROJECT/$slug"
+    local ns="$SDEV_HOME/projects/$PROJECT/$slug"
     [[ -d "$ns" ]] && { echo "$ns"; return; }
-    local flat="$WORKSPACE_ROOT/projects/$slug"
+    local flat="$SDEV_HOME/projects/$slug"
     [[ -d "$flat" ]] && { echo "$flat"; return; }
     die "task '$slug' not found in project '$PROJECT' (or legacy projects/$slug)"
 }
@@ -241,7 +238,7 @@ case "$CMD" in
         for p in $(config_projects); do
             n=0
             shopt -s nullglob
-            for d in "$WORKSPACE_ROOT"/projects/"$p"/*/; do
+            for d in "$SDEV_HOME"/projects/"$p"/*/; do
                 [[ -f "$d/.env" ]] && n=$((n+1))
             done
             printf "%-16s %-8s %-8s\n" "$p" "$n" "-"

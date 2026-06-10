@@ -2,8 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
-export WORKSPACE_ROOT
 
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
@@ -41,9 +39,9 @@ done
 [[ -n "$SLUG" ]] || { usage; die "slug required"; }
 validate_slug "$SLUG" || die "invalid slug '$SLUG' — must be kebab-case, 1-50 chars"
 
-TASK_DIR="$WORKSPACE_ROOT/projects/$PROJECT/$SLUG"
+TASK_DIR="$SDEV_HOME/projects/$PROJECT/$SLUG"
 [[ -e "$TASK_DIR" ]] && die "projects/$PROJECT/$SLUG already exists"
-[[ -e "$WORKSPACE_ROOT/projects/_archive/$PROJECT/$SLUG" ]] && die "archived task projects/_archive/$PROJECT/$SLUG exists — restore or pick another slug"
+[[ -e "$SDEV_HOME/projects/_archive/$PROJECT/$SLUG" ]] && die "archived task projects/_archive/$PROJECT/$SLUG exists — restore or pick another slug"
 
 PROFILE="$(resolve_profile_for_new "$ENV_PROFILE")"
 log "slug=$SLUG"

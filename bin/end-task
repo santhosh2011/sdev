@@ -2,8 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-: "${WORKSPACE_ROOT:=$(cd "$SCRIPT_DIR/.." && pwd)}"
-export WORKSPACE_ROOT
 
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
@@ -30,10 +28,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$SLUG" ]] || { usage; die "slug required"; }
-TASK_DIR="$WORKSPACE_ROOT/projects/$PROJECT/$SLUG"
+TASK_DIR="$SDEV_HOME/projects/$PROJECT/$SLUG"
 if [[ ! -d "$TASK_DIR" ]]; then
-    if [[ -d "$WORKSPACE_ROOT/projects/$SLUG" ]]; then
-        TASK_DIR="$WORKSPACE_ROOT/projects/$SLUG"
+    if [[ -d "$SDEV_HOME/projects/$SLUG" ]]; then
+        TASK_DIR="$SDEV_HOME/projects/$SLUG"
     else
         die "task '$SLUG' not found in project '$PROJECT'"
     fi
@@ -89,7 +87,7 @@ for p in "${TASK_REPOS[@]}"; do
 done
 
 # Soft archive
-ARCHIVE="$WORKSPACE_ROOT/projects/_archive/$PROJECT/$SLUG"
+ARCHIVE="$SDEV_HOME/projects/_archive/$PROJECT/$SLUG"
 mkdir -p "$ARCHIVE"
 for item in knowledge CLAUDE.md .claude .env docker-compose.yml compose nginx.conf; do
     [[ -e "$TASK_DIR/$item" ]] && mv "$TASK_DIR/$item" "$ARCHIVE/" || true
