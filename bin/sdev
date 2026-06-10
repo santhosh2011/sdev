@@ -48,6 +48,8 @@ Commands:
   open <slug>                     open http://localhost:<nginx-port>/ in browser
   code <slug>                     open the task dir in Zed
   cd <slug>                       print absolute task dir (use: cd "\$(sdev cd <slug>)")
+  init                            interactive wizard to configure your first project
+  migrate --from <dir>            move an old in-repo sdev layout into \$SDEV_HOME
   help | -h | --help              show this help
 EOF
 }
@@ -55,7 +57,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|up|down|nuke|end|ls|list|ps|logs|shell|open|code|cd|use|projects|help|-h|--help) return 0 ;;
+        new|up|down|nuke|end|ls|list|ps|logs|shell|open|code|cd|use|projects|init|migrate|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -94,6 +96,12 @@ case "$CMD" in
         ;;
     end)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
+        ;;
+    init)
+        exec "$SCRIPT_DIR/init"
+        ;;
+    migrate)
+        exec "$SCRIPT_DIR/migrate" "$@"
         ;;
     ls|list)
         # shellcheck disable=SC2086

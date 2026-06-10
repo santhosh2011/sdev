@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+shopt -s nullglob
+
+FROM=""; FORCE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --from)
+            [[ $# -ge 2 ]] || die "--from requires a path argument"
+            FROM="$2"; shift 2 ;;
+        --force) FORCE=1; shift ;;
+        -h|--help) echo "Usage: sdev migrate --from <old-sdev-dir> [--force]"; exit 0 ;;
+        *) die "unexpected arg: $1" ;;
+    esac
+done
+
+[[ -n "$FROM" ]] || die "--from <old-sdev-dir> required"
+[[ -d "$FROM" ]] || die "--from dir not found: $FROM"
+FROM="$(cd "$FROM" && pwd)"
+
+ensure_home
+[[ "$FROM" != "$SDEV_HOME" ]] || die "--from is the same as SDEV_HOME ($SDEV_HOME)"
+
+# Refuse a populated home (any project file other than example.yml) unless --force.
+if [[ $FORCE -eq 0 ]]; then
+    for f in "$PROJECTS_DIR"/*.yml; do
+        [[ "$(basename "$f")" == example.yml ]] && continue
+        die "$SDEV_HOME already has projects — pass --force to merge"
+    done
+fi
+
+moved=0
+copy_in() {   # $1 = path relative to FROM
+    local rel="$1" src="$FROM/$1" dst="$SDEV_HOME/$1"
+    [[ -e "$src" ]] || return 0
+    if [[ -d "$src" ]]; then
+        mkdir -p "$dst"
+        cp -R "$src/." "$dst/"   # merge contents; no nesting; preserve inner symlinks
+    else
+        mkdir -p "$(dirname "$dst")"
+        cp "$src" "$dst"
+    fi
+    log "migrated $rel"
+    moved=$((moved + 1))
+}
+
+mkdir -p "$PROJECTS_DIR"
+for f in "$FROM"/core/projects.d/*.yml; do
+    [[ "$(basename "$f")" == example.yml ]] && continue
+    cp "$f" "$PROJECTS_DIR/"
+    log "migrated core/projects.d/$(basename "$f")"
+    moved=$((moved + 1))
+done
+
+copy_in core/.task-config.yml
+copy_in core/.task-config.local.yml
+
+for d in "$FROM"/core/*/; do
+    name="$(basename "$d")"
+    [[ "$name" == projects.d ]] && continue
+    copy_in "core/$name"
+done
+
+for d in "$FROM"/confs/*/; do
+    copy_in "confs/$(basename "$d")"
+done
+
+for d in "$FROM"/projects/*/; do
+    name="$(basename "$d")"
+    [[ "$name" == _archive ]] && continue
+    copy_in "projects/$name"
+done
+
+log "migration complete — $moved item(s) into $SDEV_HOME"
