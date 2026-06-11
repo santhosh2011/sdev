@@ -42,6 +42,26 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+@test "init links an existing repo given by a ~-relative path" {
+  FAKE_HOME="$(mktemp -d)/h"; mkdir -p "$FAKE_HOME"
+  make_source_repo "$FAKE_HOME/work/api" main
+  run env HOME="$FAKE_HOME" SDEV_HOME="$SDEV_TARGET" "$WORKSPACE_ROOT/bin/init" <<EOF
+acme
+app
+api
+api
+~/work/api
+main
+api
+
+EOF
+  [ "$status" -eq 0 ]
+  [ -L "$SDEV_TARGET/core/acme/api" ]
+  [ -e "$SDEV_TARGET/core/acme/api/.git" ]   # link resolves to the real repo
+  [[ "$output" == *"linked"* ]]
+  rm -rf "$(dirname "$FAKE_HOME")"
+}
+
 @test "init refuses to overwrite an existing project" {
   # first run creates acme
   env SDEV_HOME="$SDEV_TARGET" "$WORKSPACE_ROOT/bin/init" <<EOF

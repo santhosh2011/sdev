@@ -34,7 +34,9 @@ while :; do
     name="$(ask 'Repo name (blank to finish)')"
     [[ -z "$name" ]] && break
     if ! validate_slug "$name"; then echo "  invalid repo name; skipping" >&2; continue; fi
-    source_spec="$(ask "  git URL or local path for '$name'")"
+    source_spec="$(ask "  git URL to clone, or path to an existing local repo, for '$name'")"
+    # `read` does not expand a leading ~ — do it so existing-repo paths work.
+    source_spec="${source_spec/#\~/$HOME}"
     base="$(ask '  default base branch' main)"
     valid_ref "$base" || die "invalid base branch '$base'"
     role="$(ask '  compose role' "$name")"
@@ -47,9 +49,14 @@ while :; do
             echo "  clone failed; skipping repo '$name'" >&2; continue
         fi
     elif [[ -d "$source_spec/.git" || -f "$source_spec/.git" ]]; then
-        ln -s "$(cd "$source_spec" && pwd)" "$dest"
+        # Existing local repo: symlink it in place as the worktree source.
+        abs="$(cd "$source_spec" && pwd)"
+        ln -s "$abs" "$dest"
+        log "linked existing repo $abs -> $dest"
+    elif [[ -e "$source_spec" ]]; then
+        echo "  '$source_spec' exists but is not a git repo (no .git); skipping '$name'" >&2; continue
     else
-        echo "  '$source_spec' is not a git URL or a git checkout; skipping '$name'" >&2; continue
+        echo "  '$source_spec' is not a git URL or an existing local repo; skipping '$name'" >&2; continue
     fi
     R_NAME+=("$name"); R_BASE+=("$base"); R_ROLE+=("$role")
 done
