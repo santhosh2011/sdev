@@ -82,6 +82,8 @@ If you previously ran sdev from a git clone (config under the clone itself), mov
 sdev migrate --from /path/to/old/sdev-clone
 ```
 
+> Note: end any open tasks before migrating — migrated live worktrees point at the old repo and may need to be recreated with `sdev new`.
+
 ## License
 
 [MIT](./LICENSE).

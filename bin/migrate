@@ -70,10 +70,15 @@ for d in "$FROM"/confs/*/; do
     copy_in "confs/$(basename "$d")"
 done
 
+projects_migrated=0
 for d in "$FROM"/projects/*/; do
     name="$(basename "$d")"
     [[ "$name" == _archive ]] && continue
     copy_in "projects/$name"
+    projects_migrated=$((projects_migrated + 1))
 done
+
+[[ $projects_migrated -gt 0 ]] && \
+    log "note: migrated live task worktrees reference the OLD repo and may be broken — recreate tasks with 'sdev new' after verifying"
 
 log "migration complete — $moved item(s) into $SDEV_HOME"

@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# -----------------------------------------------------------------------------
+# LEGACY IN-REPO DEVELOPER SETUP
+# This script scaffolds the old in-repo layout for developers working directly
+# from a git clone of sdev. It is NOT the install path for end users.
+# End users should install via the zip distribution:
+#   unzip sdev-<version>.zip && cd sdev && ./install
+# -----------------------------------------------------------------------------
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "note: 'bootstrap' is the legacy in-repo dev setup; end users install via the zip + ./install." >&2
 
 usage() {
     cat <<EOF

@@ -30,7 +30,6 @@ shell_service="$(ask 'Shell service (compose service for `sdev shell`)' api)"
 valid_token "$shell_service" || die "invalid shell service '$shell_service'"
 
 declare -a R_NAME=() R_BASE=() R_ROLE=()
-mkdir -p "$SDEV_HOME/core/$project"
 while :; do
     name="$(ask 'Repo name (blank to finish)')"
     [[ -z "$name" ]] && break
@@ -40,6 +39,7 @@ while :; do
     valid_ref "$base" || die "invalid base branch '$base'"
     role="$(ask '  compose role' "$name")"
     valid_token "$role" || die "invalid compose role '$role'"
+    mkdir -p "$SDEV_HOME/core/$project"
     dest="$SDEV_HOME/core/$project/$name"
     if [[ "$source_spec" == *://* || "$source_spec" == git@* ]]; then
         log "cloning $source_spec -> $dest"
