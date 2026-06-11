@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The unpacked tool dir (this script ships at the zip root).
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+INSTALL_DIR="${SDEV_INSTALL:-$HOME/.local/share/sdev}"
+HOME_DIR="${SDEV_HOME:-$HOME/.sdev}"
+BIN_DIR="${SDEV_BIN_DIR:-$HOME/.local/bin}"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+
+# --- 1. dependency check ----------------------------------------------------
+os="$(uname -s)"
+ok=1
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    warn "✗ bash >= 4 required (found ${BASH_VERSION:-?})."
+    if [[ "$os" == Darwin ]]; then warn "   macOS: brew install bash"
+    else warn "   Linux: install a newer bash via your package manager"; fi
+    ok=0
+else say "✓ bash ${BASH_VERSINFO[0]}"; fi
+_yq_major=0
+if command -v yq >/dev/null 2>&1; then
+    _yq_major="$(yq --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"; _yq_major="${_yq_major:-0}"
+fi
+if [[ "$_yq_major" -ge 4 ]]; then
+    say "✓ yq ($(yq --version 2>/dev/null))"
+else
+    warn "✗ yq v4 (mikefarah/yq) required."
+    if [[ "$os" == Darwin ]]; then warn "   macOS: brew install yq"
+    else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
+    ok=0
+fi
+if command -v docker >/dev/null 2>&1; then say "✓ docker"; else
+    warn "✗ docker not found (needed for 'sdev up'). Install Docker Desktop or OrbStack."
+    ok=0; fi
+if [[ $ok -ne 1 ]]; then
+    warn ""; warn "Install the missing dependencies above, then re-run ./install."
+    exit 1
+fi
+
+# Safety: never treat $HOME or / as the install dir (the copy loop rm -rf's items under it).
+case "$INSTALL_DIR" in
+    "$HOME"|"$HOME/"|"/"|"") warn "✗ refusing unsafe SDEV_INSTALL='$INSTALL_DIR'"; exit 1 ;;
+esac
+
+# --- 2. place the tool ------------------------------------------------------
+if [[ "$SRC_DIR" == "$INSTALL_DIR" ]]; then
+    say "✓ tool already at $INSTALL_DIR (running from install dir; skipping copy)"
+else
+    mkdir -p "$INSTALL_DIR"
+    for item in bin core README.md LICENSE VERSION confs install; do
+        [[ -e "$SRC_DIR/$item" ]] || continue
+        rm -rf "${INSTALL_DIR:?}/$item"
+        cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
+    done
+    chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/install" 2>/dev/null || true
+    say "✓ tool installed to $INSTALL_DIR"
+fi
+
+# --- 3. create user-data home (idempotent; never clobbers) ------------------
+mkdir -p "$HOME_DIR/core/projects.d" "$HOME_DIR/confs" "$HOME_DIR/projects/_archive"
+if [[ ! -f "$HOME_DIR/core/.task-config.yml" && -f "$INSTALL_DIR/core/.task-config.yml" ]]; then
+    cp "$INSTALL_DIR/core/.task-config.yml" "$HOME_DIR/core/.task-config.yml"
+    say "✓ seeded $HOME_DIR/core/.task-config.yml"
+fi
+say "✓ user-data home ready at $HOME_DIR"
+
+# --- 4. wire PATH -----------------------------------------------------------
+mkdir -p "$BIN_DIR"
+ln -sf "$INSTALL_DIR/bin/sdev" "$BIN_DIR/sdev"
+say "✓ linked $BIN_DIR/sdev -> $INSTALL_DIR/bin/sdev"
+case ":$PATH:" in
+    *":$BIN_DIR:"*) : ;;
+    *)
+        say ""
+        say "Add $BIN_DIR to your PATH (e.g. in ~/.zshrc or ~/.bashrc):"
+        say "    export PATH=\"$BIN_DIR:\$PATH\""
+        ;;
+esac
+
+cat <<EOF
+
+Done. Next:
+  sdev init      # configure your first project
+EOF
