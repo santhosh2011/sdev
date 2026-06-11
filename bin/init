@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+ensure_home
+
+# Prompt to stderr, echo the answer (or default) to stdout.
+ask() {   # $1=label $2=default(optional)
+    local label="$1" def="${2:-}" ans
+    if [[ -n "$def" ]]; then printf '%s [%s]: ' "$label" "$def" >&2
+    else printf '%s: ' "$label" >&2; fi
+    read -r ans || ans=""
+    echo "${ans:-$def}"
+}
+
+valid_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }   # conf prefix, shell service, compose role
+valid_ref()   { [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]; }  # git base branch (allows '/')
+
+project="$(ask 'Project name (kebab-case)')"
+validate_slug "$project" || die "invalid project name '$project' — kebab-case, 1-50 chars"
+proj_file="$PROJECTS_DIR/$project.yml"
+[[ -e "$proj_file" ]] && die "project '$project' already exists at $proj_file"
+
+conf_prefix="$(ask 'Conf prefix' app)"
+valid_token "$conf_prefix" || die "invalid conf prefix '$conf_prefix' (allowed: letters, digits, . _ -)"
+shell_service="$(ask 'Shell service (compose service for `sdev shell`)' api)"
+valid_token "$shell_service" || die "invalid shell service '$shell_service'"
+
+declare -a R_NAME=() R_BASE=() R_ROLE=()
+mkdir -p "$SDEV_HOME/core/$project"
+while :; do
+    name="$(ask 'Repo name (blank to finish)')"
+    [[ -z "$name" ]] && break
+    if ! validate_slug "$name"; then echo "  invalid repo name; skipping" >&2; continue; fi
+    source_spec="$(ask "  git URL or local path for '$name'")"
+    base="$(ask '  default base branch' main)"
+    valid_ref "$base" || die "invalid base branch '$base'"
+    role="$(ask '  compose role' "$name")"
+    valid_token "$role" || die "invalid compose role '$role'"
+    dest="$SDEV_HOME/core/$project/$name"
+    if [[ "$source_spec" == *://* || "$source_spec" == git@* ]]; then
+        log "cloning $source_spec -> $dest"
+        if ! git clone "$source_spec" "$dest"; then
+            echo "  clone failed; skipping repo '$name'" >&2; continue
+        fi
+    elif [[ -d "$source_spec/.git" || -f "$source_spec/.git" ]]; then
+        ln -s "$(cd "$source_spec" && pwd)" "$dest"
+    else
+        echo "  '$source_spec' is not a git URL or a git checkout; skipping '$name'" >&2; continue
+    fi
+    R_NAME+=("$name"); R_BASE+=("$base"); R_ROLE+=("$role")
+done
+
+[[ ${#R_NAME[@]} -gt 0 ]] || die "no repos added — aborting"
+
+{
+    echo "conf_prefix: $conf_prefix"
+    echo "default_shell_service: $shell_service"
+    echo "repos:"
+    for i in "${!R_NAME[@]}"; do
+        echo "  ${R_NAME[$i]}:"
+        echo "    path: ${R_NAME[$i]}"
+        echo "    default_base: ${R_BASE[$i]}"
+        echo "    compose_role: ${R_ROLE[$i]}"
+        echo "    link_node_modules: false"
+    done
+} > "$proj_file"
+log "wrote $proj_file"
+
+mkdir -p "$SDEV_HOME/confs/$project"
+conf_dest="$SDEV_HOME/confs/$project/$conf_prefix.local.env"
+if [[ ! -f "$conf_dest" ]]; then
+    if [[ -f "$SDEV_INSTALL/confs/example/app.local.env.example" ]]; then
+        cp "$SDEV_INSTALL/confs/example/app.local.env.example" "$conf_dest"
+    else
+        echo "APP_ENV=local" > "$conf_dest"
+    fi
+fi
+log "wrote $conf_dest"
+
+# Pin the project for this terminal (best-effort; ignore session quirks).
+"$SCRIPT_DIR/sdev" use "$project" >/dev/null 2>&1 || true
+
+cat <<EOF
+
+✓ project '$project' is ready.
+
+next steps:
+  sdev use $project
+  sdev new my-task
+  sdev up my-task
+  sdev open my-task
+EOF
