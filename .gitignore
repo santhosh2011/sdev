@@ -6,3 +6,6 @@
 !**/*.env.example
 .DS_Store
 *.bak
+
+# dist build output
+/build/

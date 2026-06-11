@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo 0.0.0)"
+OUT_DIR="${1:-$REPO_DIR/build}"
+
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+PKG="$STAGE/sdev"
+mkdir -p "$PKG"
+
+# Tool code + top-level reference assets.
+cp -R "$REPO_DIR/bin" "$PKG/bin"
+cp "$REPO_DIR/install" "$PKG/install"
+for f in README.md LICENSE VERSION; do
+    [[ -f "$REPO_DIR/$f" ]] && cp "$REPO_DIR/$f" "$PKG/$f"
+done
+
+# core/: ship ONLY the default config + example registry — no personal projects, no clones.
+mkdir -p "$PKG/core/projects.d"
+cp "$REPO_DIR/core/.task-config.yml" "$PKG/core/.task-config.yml"
+cp "$REPO_DIR/core/projects.d/example.yml" "$PKG/core/projects.d/example.yml"
+
+# confs/: ship ONLY *.example files — never real env files.
+if [[ -d "$REPO_DIR/confs" ]]; then
+    while IFS= read -r f; do
+        rel="${f#"$REPO_DIR"/}"
+        mkdir -p "$PKG/$(dirname "$rel")"
+        cp "$f" "$PKG/$rel"
+    done < <(find "$REPO_DIR/confs" -type f -name '*.example')
+fi
+
+mkdir -p "$OUT_DIR"
+ZIP="$(cd "$OUT_DIR" && pwd)/sdev-$VERSION.zip"
+rm -f "$ZIP"
+( cd "$STAGE" && zip -rq "$ZIP" sdev )
+
+echo "$ZIP"
