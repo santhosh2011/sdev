@@ -14,26 +14,34 @@ A small CLI for running many **isolated, parallel docker-compose workspaces** �
 - **[yq](https://github.com/mikefarah/yq) v4** (`brew install yq`)
 - **docker** + compose (Docker Desktop or OrbStack)
 
-## Install
+## Install (from the zip)
+
+You'll receive a `sdev-<version>.zip`. Then:
 
 ```bash
-git clone <your-fork-url> ~/sdev
-cd ~/sdev
-./bootstrap                          # checks deps, scaffolds dirs, prints the PATH line
-export PATH="$HOME/sdev/bin:$PATH"   # add this to your ~/.zshrc or ~/.bashrc
+unzip sdev-<version>.zip
+cd sdev
+./install        # checks deps, installs the tool, seeds ~/.sdev, links `sdev` onto your PATH
 ```
 
-`./bootstrap` is safe to re-run. Use `./bootstrap --check` to verify dependencies only, or `./bootstrap --path` to re-print the PATH line.
+`./install` is idempotent and never touches your data in `~/.sdev`. If `~/.local/bin` isn't on your `PATH`, it prints the line to add.
 
-## Define a project
+**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS), [yq](https://github.com/mikefarah/yq) v4, and docker + compose (Docker Desktop or OrbStack).
+
+### Where things live
+
+- **Tool code:** `~/.local/share/sdev` (replaceable; overwritten on upgrade).
+- **Your data — `$SDEV_HOME`, default `~/.sdev`:** project definitions (`core/projects.d/`), env profiles/secrets (`confs/`), repo clones (`core/<project>/`), and live workspaces (`projects/`). Survives upgrades.
+
+## Configure your first project
 
 ```bash
-cp core/projects.d/example.yml core/projects.d/acme.yml   # then edit
-mkdir -p core/acme && git -C core/acme clone <repo> my-api-repo   # worktree source(s)
-mkdir -p confs/acme && cp confs/example/app.local.env.example confs/acme/app.local.env
+sdev init
 ```
 
-`acme.yml` declares the repos (each becomes a worktree in every task), the `conf_prefix`, the shell service, and optionally a project-specific compose `template`. Repo worktree sources live under `core/<project>/<path>`.
+`sdev init` asks for a project name, your repos (git URL or local checkout), branches, and compose roles. It writes `~/.sdev/core/projects.d/<name>.yml`, clones/links the repos under `~/.sdev/core/<name>/`, seeds `~/.sdev/confs/<name>/<prefix>.local.env`, and prints the exact commands to bring a stack up.
+
+To edit a project later, open its YAML in `~/.sdev/core/projects.d/`.
 
 ## Daily use
 
@@ -61,6 +69,18 @@ sdev open login-fix
 ## Running in parallel
 
 Pin different projects in different terminals (`sdev use acme` here, `sdev use beta` there). Port offsets are allocated from a single global pool across every project, so multiple stacks can be `up` simultaneously with no host-port collisions.
+
+## Upgrading
+
+Unzip the newer `sdev-<version>.zip` and re-run `./install`. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced.
+
+### Coming from an older in-repo layout?
+
+If you previously ran sdev from a git clone (config under the clone itself), move it into `~/.sdev`:
+
+```bash
+sdev migrate --from /path/to/old/sdev-clone
+```
 
 ## License
 
