@@ -66,6 +66,8 @@ sdev up login-fix
 sdev open login-fix
 ```
 
+`sdev new` fetches each repo from `origin` and starts the task branch off the **latest `origin/<base>`** (the per-repo `default_base`, e.g. `develop`) — so a new task always builds on the current integration branch, even if your local clone is behind. Pass `--no-fetch` to skip the fetch (offline / speed) and use whatever the source repo already has. If the fetch fails, it warns and falls back to the local base.
+
 ## Running in parallel
 
 Pin different projects in different terminals (`sdev use acme` here, `sdev use beta` there). Port offsets are allocated from a single global pool across every project, so multiple stacks can be `up` simultaneously with no host-port collisions.

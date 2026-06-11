@@ -10,15 +10,18 @@ PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 
 usage() {
     cat <<EOF
-Usage: new-task <slug> [--env local|dev|staging] [--repos api,ui] [--api-base qa] [--ui-base qa]
+Usage: new-task <slug> [--env local|dev|staging] [--repos api,ui] [--api-base qa] [--ui-base qa] [--no-fetch]
 
 Creates an isolated parallel-task workspace under projects/<project>/<slug>/.
+Each repo's task branch starts from the latest origin/<base> (fetched first);
+pass --no-fetch to skip the fetch and use whatever the source repo already has.
 EOF
 }
 
 SLUG=""
 REPOS_ARG=""
 ENV_PROFILE=""
+FETCH=1
 declare -A BASE_OVERRIDE=()
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +29,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help) usage; exit 0 ;;
         --repos) REPOS_ARG="$2"; shift 2 ;;
         --env) ENV_PROFILE="$2"; shift 2 ;;
+        --no-fetch) FETCH=0; shift ;;
         --*-base)
             key="${1#--}"; key="${key%-base}"
             BASE_OVERRIDE[$key]="$2"
@@ -82,19 +86,31 @@ for r in "${SELECTED[@]}"; do
     base="${BASE_OVERRIDE[$r]:-$(config_repo_base "$PROJECT" "$r")}"
     src="$(repo_source_dir "$PROJECT" "$repo_path")"
     [[ -d "$src/.git" || -f "$src/.git" ]] || die "$repo_path: no git source at $src"
-    log "creating worktree $r ($repo_path) on branch task/$SLUG from $base"
-    # If the base branch only exists on a remote, create a local tracking branch
-    # first — otherwise `git worktree add -b new base` may misinterpret the ref.
-    if ! git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
-        if git -C "$src" show-ref --verify --quiet "refs/remotes/origin/$base"; then
-            git -C "$src" branch --track "$base" "origin/$base" >/dev/null
+
+    # Refresh the base from origin so the task starts on the latest (unless --no-fetch).
+    if [[ $FETCH -eq 1 ]]; then
+        if git -C "$src" fetch --quiet origin "$base" 2>/dev/null; then
+            log "fetched origin/$base for $repo_path"
         else
-            die "$repo_path: base branch '$base' not found locally or on origin"
+            log "warning: $repo_path: fetch of '$base' from origin failed — base may be stale"
         fi
     fi
-    git -C "$src" worktree add \
+
+    # Start the task branch from the freshest base available: prefer the remote
+    # tip (origin/<base>), else a local branch. --no-track keeps task/<slug> from
+    # adopting the base as its upstream.
+    if git -C "$src" show-ref --verify --quiet "refs/remotes/origin/$base"; then
+        start_point="origin/$base"
+    elif git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
+        start_point="$base"
+    else
+        die "$repo_path: base branch '$base' not found locally or on origin"
+    fi
+    log "creating worktree $r ($repo_path) on branch task/$SLUG from $start_point"
+
+    git -C "$src" worktree add --no-track \
         "$TASK_DIR/$repo_path" \
-        -b "task/$SLUG" "$base" >/dev/null
+        -b "task/$SLUG" "$start_point" >/dev/null
     CREATED+=("$r")
 done
 
