@@ -135,6 +135,27 @@ EOF
   [ -d "$SDEV_TARGET/core/acme/clone/.git" ]
 }
 
+@test "edit remove --delete-source deletes a clean cloned source" {
+  edit acme <<EOF
+a
+clone
+file://$SRC
+main
+api
+q
+EOF
+  [ -d "$SDEV_TARGET/core/acme/clone/.git" ]
+  run edit acme --delete-source <<EOF
+r
+clone
+q
+EOF
+  [ "$status" -eq 0 ]
+  [ ! -e "$SDEV_TARGET/core/acme/clone" ]
+  run yq -r '.repos | has("clone")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
+}
+
 @test "edit p/s/t: edits scalar fields and stack list" {
   run edit acme <<EOF
 p

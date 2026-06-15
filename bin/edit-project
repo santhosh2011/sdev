@@ -104,9 +104,12 @@ remove_repo() {
         rm -f "$dest"; log "unlinked symlinked source $dest"
     elif [[ -d "$dest" ]]; then
         if [[ $DELETE_SOURCE -eq 1 ]]; then
-            local dirty; dirty="$(git -C "$dest" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            local dirty unpushed
+            dirty="$(git -C "$dest" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            unpushed="$(git -C "$dest" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+            dirty=$(( dirty + unpushed ))
             if [[ "$dirty" != 0 ]]; then
-                echo "  ⚠ $dest has $dirty uncommitted change(s). Type 'yes' to delete anyway:" >&2
+                echo "  ⚠ $dest has $dirty uncommitted/unpushed change(s). Type 'yes' to delete anyway:" >&2
                 local a; read -r a || a=""
                 if [[ "$a" != yes ]]; then echo "  keeping source $dest" >&2; dest=""; fi
             fi
