@@ -34,3 +34,36 @@ edit() { env SDEV_HOME="$SDEV_TARGET" SDEV_PROJECT=acme "$WORKSPACE_ROOT/bin/edi
   [ "$status" -ne 0 ]
   [[ "$output" == *"not found"* ]]
 }
+
+@test "edit add: symlinks a local repo and writes the YAML block" {
+  WEB="$(mktemp -d)/web"; make_source_repo "$WEB" main
+  run edit acme <<EOF
+a
+web
+$WEB
+main
+ui
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos.web.path' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "web" ]
+  run yq -r '.repos.web.compose_role' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "ui" ]
+  [ -L "$SDEV_TARGET/core/acme/web" ]
+  rm -rf "$(dirname "$WEB")"
+}
+
+@test "edit add: refuses a duplicate repo name" {
+  run edit acme <<EOF
+a
+api
+$SRC
+main
+api
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos | keys | length' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "1" ]
+}

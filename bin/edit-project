@@ -55,11 +55,33 @@ show() {
     done < <(yq -r '.repos | keys | .[]' "$proj_file" 2>/dev/null)
 }
 
+add_repo() {
+    local name source base role out
+    name="$(ask 'Repo name')"
+    if ! validate_slug "$name"; then echo "  invalid repo name '$name'" >&2; return 0; fi
+    if yq -e ".repos | has(\"$name\")" "$proj_file" >/dev/null 2>&1; then
+        echo "  repo '$name' already exists" >&2; return 0
+    fi
+    source="$(ask '  git URL to clone, or path to an existing local repo')"
+    base="$(ask '  default base branch' main)"
+    if ! valid_ref "$base"; then echo "  invalid base branch '$base'" >&2; return 0; fi
+    role="$(ask '  compose role' "$name")"
+    if ! valid_token "$role"; then echo "  invalid compose role '$role'" >&2; return 0; fi
+    if out="$(add_repo_source "$project" "$name" "$source")"; then
+        log "$out repo '$name'"
+    else
+        echo "  could not add source; aborting add" >&2; return 0
+    fi
+    yq -i ".repos.\"$name\" = {\"path\": \"$name\", \"default_base\": \"$base\", \"compose_role\": \"$role\", \"link_node_modules\": false}" "$proj_file"
+    log "added repo '$name'"
+}
+
 while :; do
     show
     printf '\n  [a] add repo   [r] remove repo   [p] conf prefix   [s] shell service   [t] stack services   [q] quit\n> ' >&2
     read -r choice || break
     case "$choice" in
+        a) add_repo ;;
         q|"") break ;;
         *) echo "  (not yet implemented: '$choice')" >&2 ;;
     esac
