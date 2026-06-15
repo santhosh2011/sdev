@@ -240,5 +240,32 @@ compute_next_offset() {
     echo "$candidate"
 }
 
+# Clone (git URL) or symlink (existing local git repo) a repo source into
+# core/<project>/<name>. Expands a leading ~. Echoes "cloned" or "linked" on
+# success; prints the reason to stderr and returns 1 on failure.
+add_repo_source() {   # $1=project $2=name $3=source_spec
+    local project="$1" name="$2" spec="${3:-}"
+    spec="${spec/#\~/$HOME}"
+    local dest="$SDEV_HOME/core/$project/$name"
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        echo "source already exists at $dest" >&2; return 1
+    fi
+    mkdir -p "$SDEV_HOME/core/$project"
+    if [[ "$spec" == *://* || "$spec" == git@* ]]; then
+        if ! git clone -q "$spec" "$dest" >&2; then
+            echo "clone failed: $spec" >&2; return 1
+        fi
+        echo cloned
+    elif [[ -d "$spec/.git" || -f "$spec/.git" ]]; then
+        local abs; abs="$(cd "$spec" && pwd)"
+        ln -s "$abs" "$dest"
+        echo linked
+    elif [[ -e "$spec" ]]; then
+        echo "'$spec' exists but is not a git repo (no .git)" >&2; return 1
+    else
+        echo "'$spec' is not a git URL or an existing local repo" >&2; return 1
+    fi
+}
+
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "[$(basename "$0")] $*"; }
