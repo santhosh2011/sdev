@@ -35,6 +35,7 @@ run_install_prompt() {
   [ -L "$BINDIR/sdev" ]
   [ "$(readlink "$BINDIR/sdev")" = "$INST/bin/sdev" ]
   [[ "$output" == *"export PATH"* ]]
+  [[ "$output" == *"✓ git"* ]]
   # env-provided home: installer must not touch the user's rc
   [ ! -f "$FAKEHOME/.zshrc" ]
 }

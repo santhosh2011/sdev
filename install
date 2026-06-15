@@ -108,6 +108,12 @@ fi
 if command -v docker >/dev/null 2>&1; then say "✓ docker"; else
     warn "✗ docker not found (needed for 'sdev up'). Install Docker Desktop or OrbStack."
     ok=0; fi
+if command -v git >/dev/null 2>&1; then say "✓ git"; else
+    warn "✗ git not found (required for project setup and tasks)."
+    if [[ "$os" == Darwin ]]; then warn "   macOS: xcode-select --install (or brew install git)"
+    else warn "   Linux: install git via your package manager"; fi
+    ok=0
+fi
 if [[ $ok -ne 1 ]]; then
     warn ""; warn "Install the missing dependencies above, then re-run ./install."
     exit 1
