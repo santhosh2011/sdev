@@ -5,11 +5,84 @@ set -euo pipefail
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 INSTALL_DIR="${SDEV_INSTALL:-$HOME/.local/share/sdev}"
-HOME_DIR="${SDEV_HOME:-$HOME/.sdev}"
 BIN_DIR="${SDEV_BIN_DIR:-$HOME/.local/bin}"
+HOME_DIR=""   # resolved below (env override or interactive prompt)
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
+
+# Expand a leading ~ and make the path absolute (relative to $PWD).
+expand_path() {
+    local p="$1"
+    # Match a literal leading tilde the user typed, then expand it to $HOME.
+    # shellcheck disable=SC2088
+    case "$p" in
+        "~")    p="$HOME" ;;
+        "~/"*)  p="$HOME/${p#\~/}" ;;
+    esac
+    case "$p" in /*) : ;; *) p="$PWD/$p" ;; esac
+    printf '%s' "$p"
+}
+
+# Reject paths that are unsafe or unusable as a data home.
+validate_home() {
+    local p="$1"
+    case "$p" in
+        ""|"/"|"$HOME")
+            warn "✗ '$p' is not a valid project home — choose a dedicated directory."; return 1 ;;
+    esac
+    if [[ -e "$p" && ! -d "$p" ]]; then
+        warn "✗ '$p' exists and is not a directory."; return 1
+    fi
+    if ! mkdir -p "$p" 2>/dev/null; then
+        warn "✗ cannot create '$p' (permission denied?)."; return 1
+    fi
+    if [[ ! -w "$p" ]]; then
+        warn "✗ '$p' is not writable."; return 1
+    fi
+    return 0
+}
+
+# The shell rc file to persist exports into.
+detect_rc() {
+    case "$(basename "${SHELL:-sh}")" in
+        zsh)  printf '%s' "$HOME/.zshrc" ;;
+        bash) if [[ "${os:-}" == Darwin ]]; then printf '%s' "$HOME/.bash_profile"
+              else printf '%s' "$HOME/.bashrc"; fi ;;
+        *)    printf '%s' "$HOME/.profile" ;;
+    esac
+}
+
+# Write SDEV_HOME (+ PATH if needed) into the user's rc, inside an idempotent marked block.
+persist_rc() {
+    local rc="$1" tmp
+    local start="# >>> sdev >>>" end="# <<< sdev <<<"
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    # Warn about hand-written SDEV_HOME exports anywhere they commonly hide (outside our block).
+    local f
+    for f in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" \
+             "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        [[ -f "$f" ]] || continue
+        if grep -Eq '^[[:space:]]*export[[:space:]]+SDEV_HOME' "$f" 2>/dev/null \
+           && ! grep -qF "$start" "$f" 2>/dev/null; then
+            warn "⚠️  hand-written SDEV_HOME export found in $f — remove it to avoid clashing with $rc."
+        fi
+    done
+    if grep -qF "$start" "$rc" 2>/dev/null; then
+        tmp="$(mktemp)"
+        awk -v s="$start" -v e="$end" '
+            $0==s {skip=1; next} skip && $0==e {skip=0; next} skip {next} {print}
+        ' "$rc" > "$tmp" && cat "$tmp" > "$rc" && rm -f "$tmp"
+    fi
+    {
+        printf '%s\n' "$start"
+        printf 'export SDEV_HOME=%q\n' "$HOME_DIR"
+        case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) printf 'export PATH=%q:"$PATH"\n' "$BIN_DIR" ;; esac
+        printf '%s\n' "$end"
+    } >> "$rc"
+    say "✓ wired exports into $rc — restart your shell or run: source $rc"
+}
 
 # --- 1. dependency check ----------------------------------------------------
 os="$(uname -s)"
@@ -60,7 +133,37 @@ else
     say "✓ tool installed to $INSTALL_DIR"
 fi
 
-# --- 3. create user-data home (idempotent; never clobbers) ------------------
+# --- 3. resolve the project home --------------------------------------------
+# Interactive: always ask, pre-filling the best-known value as the default.
+# Non-interactive: honour $SDEV_HOME / $WORKSPACE_ROOT, else read one piped line, else ~/.sdev.
+FROM_PROMPT=0
+if [[ -t 0 ]]; then
+    FROM_PROMPT=1
+    default_home="${SDEV_HOME:-${WORKSPACE_ROOT:-$HOME/.sdev}}"
+    attempts=0
+    while :; do
+        printf 'Where should sdev keep your projects, configs & repos? [%s]: ' "$default_home" >&2
+        IFS= read -r reply || reply=""
+        reply="$(expand_path "${reply:-$default_home}")"
+        if validate_home "$reply"; then HOME_DIR="$reply"; break; fi
+        attempts=$((attempts + 1))
+        [[ $attempts -ge 5 ]] && { warn "✗ no valid project home after 5 tries — aborting."; exit 1; }
+    done
+elif [[ -n "${SDEV_HOME:-}" ]]; then
+    HOME_DIR="$SDEV_HOME"
+elif [[ -n "${WORKSPACE_ROOT:-}" ]]; then
+    HOME_DIR="$WORKSPACE_ROOT"
+else
+    FROM_PROMPT=1
+    IFS= read -r reply || reply=""
+    reply="$(expand_path "${reply:-$HOME/.sdev}")"
+    validate_home "$reply" || { warn "✗ invalid project home '$reply' — aborting."; exit 1; }
+    HOME_DIR="$reply"
+fi
+export SDEV_HOME="$HOME_DIR"
+say "✓ project home: $HOME_DIR"
+
+# --- 4. create user-data home (idempotent; never clobbers) ------------------
 mkdir -p "$HOME_DIR/core/projects.d" "$HOME_DIR/confs" "$HOME_DIR/projects/_archive"
 if [[ ! -f "$HOME_DIR/core/.task-config.yml" && -f "$INSTALL_DIR/core/.task-config.yml" ]]; then
     cp "$INSTALL_DIR/core/.task-config.yml" "$HOME_DIR/core/.task-config.yml"
@@ -68,18 +171,24 @@ if [[ ! -f "$HOME_DIR/core/.task-config.yml" && -f "$INSTALL_DIR/core/.task-conf
 fi
 say "✓ user-data home ready at $HOME_DIR"
 
-# --- 4. wire PATH -----------------------------------------------------------
+# --- 5. wire PATH + persist exports -----------------------------------------
 mkdir -p "$BIN_DIR"
 ln -sf "$INSTALL_DIR/bin/sdev" "$BIN_DIR/sdev"
 say "✓ linked $BIN_DIR/sdev -> $INSTALL_DIR/bin/sdev"
-case ":$PATH:" in
-    *":$BIN_DIR:"*) : ;;
-    *)
-        say ""
-        say "Add $BIN_DIR to your PATH (e.g. in ~/.zshrc or ~/.bashrc):"
-        say "    export PATH=\"$BIN_DIR:\$PATH\""
-        ;;
-esac
+if [[ $FROM_PROMPT -eq 1 ]]; then
+    # We chose the project home for the user, so own the rc wiring too (SDEV_HOME + PATH).
+    persist_rc "$(detect_rc)"
+else
+    # Home came from the environment; the user manages their own env. Just advise on PATH.
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) : ;;
+        *)
+            say ""
+            say "Add $BIN_DIR to your PATH (e.g. in ~/.zshrc or ~/.bashrc):"
+            say "    export PATH=\"$BIN_DIR:\$PATH\""
+            ;;
+    esac
+fi
 
 cat <<EOF
 

@@ -10,6 +10,9 @@
 REPO_BIN="$(cd "${BATS_TEST_DIRNAME:-$(dirname "${BASH_SOURCE[0]}")}/../bin" && pwd)"
 
 make_fixture() {
+    # SDEV_HOME outranks WORKSPACE_ROOT in _lib.sh; unset it so the fixture
+    # is authoritative even when the developer has SDEV_HOME exported.
+    unset SDEV_HOME
     WORKSPACE_ROOT="$(mktemp -d)"
     export WORKSPACE_ROOT
     mkdir -p "$WORKSPACE_ROOT/core/projects.d" "$WORKSPACE_ROOT/confs" \

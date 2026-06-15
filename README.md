@@ -21,10 +21,12 @@ You'll receive a `sdev-<version>.zip`. Then:
 ```bash
 unzip sdev-<version>.zip
 cd sdev
-./install        # checks deps, installs the tool, seeds ~/.sdev, links `sdev` onto your PATH
+./install        # checks deps, installs the tool, asks where your project home lives, links `sdev`
 ```
 
-`./install` is idempotent and never touches your data in `~/.sdev`. If `~/.local/bin` isn't on your `PATH`, it prints the line to add.
+When run interactively, `./install` **prompts for your project home** (where projects, configs, and repos live; default `~/.sdev`), validates the path, then persists `export SDEV_HOME` and `PATH` into your shell rc inside an idempotent `# >>> sdev >>>` block. Set `SDEV_HOME` in the environment beforehand to skip the prompt (CI / scripted installs) — in that case the installer leaves your rc untouched and just prints the `PATH` line if needed.
+
+`./install` is idempotent and never touches your data under `$SDEV_HOME`.
 
 **Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS), [yq](https://github.com/mikefarah/yq) v4, and docker + compose (Docker Desktop or OrbStack).
 
