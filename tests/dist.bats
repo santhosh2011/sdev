@@ -28,3 +28,11 @@ teardown() { rm -rf "$OUT"; }
   [[ "$output" == "$REPO/build/"* ]]
   rm -rf "$REPO/build"
 }
+
+@test "dist emits a .sha256 checksum next to the zip" {
+  run bash "$REPO/dist" "$OUT"
+  [ "$status" -eq 0 ]
+  zipfile="$output"
+  [ -f "$zipfile.sha256" ]
+  ( cd "$(dirname "$zipfile")" && shasum -a 256 -c "$(basename "$zipfile").sha256" )
+}

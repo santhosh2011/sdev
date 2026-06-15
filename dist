@@ -36,4 +36,7 @@ ZIP="$(cd "$OUT_DIR" && pwd)/sdev-$VERSION.zip"
 rm -f "$ZIP"
 ( cd "$STAGE" && zip -rq "$ZIP" sdev )
 
+# Integrity checksum for the published zip.
+( cd "$(dirname "$ZIP")" && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$ZIP").sha256" )
+
 echo "$ZIP"
