@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+ensure_home
+
+DELETE_SOURCE=0
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --delete-source) DELETE_SOURCE=1; shift ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+: "${DELETE_SOURCE}"  # used by future --delete-source implementation
+set -- "${ARGS[@]:-}"
+[[ -z "${1:-}" ]] && set --
+
+project="${1:-$(resolve_project "${SDEV_PROJECT:-}")}"
+[[ -n "$project" ]] || die "no project given and none active"
+proj_file="$(project_config_file "$project")"
+[[ -f "$proj_file" ]] || die "project '$project' not found — create it with: sdev init"
+
+ask() {   # $1=label $2=default(optional)
+    local label="$1" def="${2:-}" ans
+    if [[ -n "$def" ]]; then printf '%s [%s]: ' "$label" "$def" >&2
+    else printf '%s: ' "$label" >&2; fi
+    read -r ans || ans=""
+    echo "${ans:-$def}"
+}
+valid_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+valid_ref()   { [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]; }
+
+show() {
+    echo ""
+    echo "Project: $project  ($proj_file)"
+    echo "  conf_prefix:    $(yq -r '.conf_prefix // "app"' "$proj_file")"
+    echo "  shell_service:  $(yq -r '.default_shell_service // "api"' "$proj_file")"
+    local ss; ss="$(yq -r '(.stack_services // []) | join(", ")' "$proj_file")"
+    if [[ -n "$ss" ]]; then echo "  stack_services: $ss"; else echo "  stack_services: (inherits global default)"; fi
+    echo "  repos:"
+    local r p b role dest kind
+    while read -r r; do
+        [[ -z "$r" ]] && continue
+        p="$(yq -r ".repos.\"$r\".path" "$proj_file")"
+        b="$(yq -r ".repos.\"$r\".default_base" "$proj_file")"
+        role="$(yq -r ".repos.\"$r\".compose_role" "$proj_file")"
+        dest="$SDEV_HOME/core/$project/$p"
+        if [[ -L "$dest" ]]; then kind="symlink -> $(readlink "$dest")"
+        elif [[ -d "$dest" ]]; then kind="clone"
+        else kind="MISSING SOURCE"; fi
+        printf '    %-12s base=%-8s role=%-8s %s\n' "$r" "$b" "$role" "$kind"
+    done < <(yq -r '.repos | keys | .[]' "$proj_file" 2>/dev/null)
+}
+
+while :; do
+    show
+    printf '\n  [a] add repo   [r] remove repo   [p] conf prefix   [s] shell service   [t] stack services   [q] quit\n> ' >&2
+    read -r choice || break
+    case "$choice" in
+        q|"") break ;;
+        *) echo "  (not yet implemented: '$choice')" >&2 ;;
+    esac
+done

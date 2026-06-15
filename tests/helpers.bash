@@ -22,7 +22,7 @@ make_fixture() {
     # SCRIPT_DIR resolution and `source _lib.sh` work against fixture paths.
     cp "$REPO_BIN"/_lib.sh "$REPO_BIN"/sdev "$REPO_BIN"/new-task \
        "$REPO_BIN"/list-tasks "$REPO_BIN"/end-task "$REPO_BIN"/migrate \
-       "$REPO_BIN"/init "$WORKSPACE_ROOT/bin/"
+       "$REPO_BIN"/init "$REPO_BIN"/edit-project "$WORKSPACE_ROOT/bin/"
     cp -R "$REPO_BIN/templates" "$WORKSPACE_ROOT/bin/templates"
     chmod +x "$WORKSPACE_ROOT/bin/"*
 
