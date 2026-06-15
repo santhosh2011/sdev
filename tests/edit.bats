@@ -81,6 +81,39 @@ EOF
   [ -d "$SRC/.git" ]
 }
 
+@test "edit remove: refuses when a task worktree exists, force removes it but keeps the branch" {
+  # create a real task worktree of api under projects/acme/foo
+  src="$SRC"
+  task="$SDEV_TARGET/projects/acme/foo"; mkdir -p "$task"
+  git -C "$src" worktree add --no-track "$task/api" -b task/foo main >/dev/null 2>&1
+
+  # refusal path: anything but 'force' aborts, repo stays
+  run edit acme <<EOF
+r
+api
+no
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos | has("api")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "true" ]
+  [ -e "$task/api/.git" ]
+
+  # force path: worktree removed, branch kept, repo dropped
+  run edit acme <<EOF
+r
+api
+force
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos | has("api")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
+  [ ! -e "$task/api" ]
+  run git -C "$src" branch --list task/foo
+  [[ "$output" == *"task/foo"* ]]
+}
+
 @test "edit remove: keeps a cloned source by default" {
   edit acme <<EOF
 a
