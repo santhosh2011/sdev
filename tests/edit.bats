@@ -67,3 +67,37 @@ EOF
   run yq -r '.repos | keys | length' "$SDEV_TARGET/core/projects.d/acme.yml"
   [ "$output" = "1" ]
 }
+
+@test "edit remove: deletes the YAML block and unlinks a symlinked source" {
+  run edit acme <<EOF
+r
+api
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos | has("api")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
+  [ ! -e "$SDEV_TARGET/core/acme/api" ]
+  [ -d "$SRC/.git" ]
+}
+
+@test "edit remove: keeps a cloned source by default" {
+  edit acme <<EOF
+a
+clone
+file://$SRC
+main
+api
+q
+EOF
+  [ -d "$SDEV_TARGET/core/acme/clone/.git" ]
+  run edit acme <<EOF
+r
+clone
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.repos | has("clone")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
+  [ -d "$SDEV_TARGET/core/acme/clone/.git" ]
+}

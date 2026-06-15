@@ -14,7 +14,6 @@ while [[ $# -gt 0 ]]; do
         *) ARGS+=("$1"); shift ;;
     esac
 done
-: "${DELETE_SOURCE}"  # used by future --delete-source implementation
 set -- "${ARGS[@]:-}"
 [[ -z "${1:-}" ]] && set --
 
@@ -76,12 +75,65 @@ add_repo() {
     log "added repo '$name'"
 }
 
+remove_repo() {
+    local name; name="$(ask 'Repo to remove')"
+    if ! yq -e ".repos | has(\"$name\")" "$proj_file" >/dev/null 2>&1; then
+        echo "  no such repo '$name'" >&2; return 0
+    fi
+    local p; p="$(yq -r ".repos.\"$name\".path" "$proj_file")"
+
+    # 1. live task worktrees?
+    local -a wts=()
+    shopt -s nullglob
+    local d
+    for d in "$SDEV_HOME/projects/$project"/*/; do
+        [[ -e "$d$p/.git" ]] && wts+=("${d}$p")
+    done
+    shopt -u nullglob
+    if [[ ${#wts[@]} -gt 0 ]]; then
+        echo "  ⚠ live task worktrees use '$name':" >&2
+        printf '      %s\n' "${wts[@]}" >&2
+        echo "  end those tasks (sdev end <slug>), or type 'force' to remove the worktrees (branches kept):" >&2
+        local ans; read -r ans || ans=""
+        if [[ "$ans" != force ]]; then echo "  aborted removal of '$name'" >&2; return 0; fi
+        local src; src="$(repo_source_dir "$project" "$p")"
+        local w
+        for w in "${wts[@]}"; do
+            git -C "$src" worktree remove --force "$w" 2>/dev/null || true
+            echo "    removed worktree $w (branch kept)" >&2
+        done
+    fi
+
+    # 2. source: unlink symlink; keep clone unless --delete-source
+    local dest="$SDEV_HOME/core/$project/$p"
+    if [[ -L "$dest" ]]; then
+        rm -f "$dest"; log "unlinked symlinked source $dest"
+    elif [[ -d "$dest" ]]; then
+        if [[ $DELETE_SOURCE -eq 1 ]]; then
+            local dirty; dirty="$(git -C "$dest" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            if [[ "$dirty" != 0 ]]; then
+                echo "  ⚠ $dest has $dirty uncommitted change(s). Type 'yes' to delete anyway:" >&2
+                local a; read -r a || a=""
+                if [[ "$a" != yes ]]; then echo "  keeping source $dest" >&2; dest=""; fi
+            fi
+            if [[ -n "$dest" ]]; then rm -rf "$dest"; log "deleted clone $dest"; fi
+        else
+            log "kept clone at $dest (pass --delete-source to remove)"
+        fi
+    fi
+
+    # 3. drop the YAML block
+    yq -i "del(.repos.\"$name\")" "$proj_file"
+    log "removed repo '$name'"
+}
+
 while :; do
     show
     printf '\n  [a] add repo   [r] remove repo   [p] conf prefix   [s] shell service   [t] stack services   [q] quit\n> ' >&2
     read -r choice || break
     case "$choice" in
         a) add_repo ;;
+        r) remove_repo ;;
         q|"") break ;;
         *) echo "  (not yet implemented: '$choice')" >&2 ;;
     esac
