@@ -127,6 +127,34 @@ remove_repo() {
     log "removed repo '$name'"
 }
 
+set_scalar() {   # $1=yaml-key $2=label
+    local key="$1" label="$2" v
+    v="$(ask "$label")"
+    if ! valid_token "$v"; then echo "  invalid value '$v'" >&2; return 0; fi
+    yq -i ".$key = \"$v\"" "$proj_file"
+    log "set $key = $v"
+}
+
+set_stack() {
+    local line; line="$(ask 'Stack services (comma/space separated; blank = inherit global)')"
+    if [[ -z "$line" ]]; then
+        yq -i 'del(.stack_services)' "$proj_file"; log "stack_services -> inherit global"; return 0
+    fi
+    local -a svcs=(); local s
+    for s in ${line//,/ }; do
+        if ! valid_token "$s"; then echo "  invalid service '$s'" >&2; return 0; fi
+        svcs+=("$s")
+    done
+    local json="["; local i
+    for i in "${!svcs[@]}"; do
+        json+="\"${svcs[$i]}\""
+        [[ $i -lt $(( ${#svcs[@]} - 1 )) ]] && json+=","
+    done
+    json+="]"
+    yq -i ".stack_services = $json" "$proj_file"
+    log "stack_services = ${svcs[*]}"
+}
+
 while :; do
     show
     printf '\n  [a] add repo   [r] remove repo   [p] conf prefix   [s] shell service   [t] stack services   [q] quit\n> ' >&2
@@ -134,6 +162,9 @@ while :; do
     case "$choice" in
         a) add_repo ;;
         r) remove_repo ;;
+        p) set_scalar conf_prefix 'Conf prefix' ;;
+        s) set_scalar default_shell_service 'Shell service' ;;
+        t) set_stack ;;
         q|"") break ;;
         *) echo "  (not yet implemented: '$choice')" >&2 ;;
     esac

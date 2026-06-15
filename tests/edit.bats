@@ -134,3 +134,34 @@ EOF
   [ "$output" = "false" ]
   [ -d "$SDEV_TARGET/core/acme/clone/.git" ]
 }
+
+@test "edit p/s/t: edits scalar fields and stack list" {
+  run edit acme <<EOF
+p
+acme-api
+s
+worker
+t
+nginx, api, db
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.conf_prefix' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "acme-api" ]
+  run yq -r '.default_shell_service' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "worker" ]
+  run yq -r '.stack_services | join(",")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "nginx,api,db" ]
+}
+
+@test "edit t: blank input clears stack_services (inherit global)" {
+  yq -i '.stack_services = ["api","db"]' "$SDEV_TARGET/core/projects.d/acme.yml"
+  run edit acme <<EOF
+t
+
+q
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r 'has("stack_services")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
+}
