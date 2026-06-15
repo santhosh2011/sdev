@@ -41,22 +41,11 @@ while :; do
     valid_ref "$base" || die "invalid base branch '$base'"
     role="$(ask '  compose role' "$name")"
     valid_token "$role" || die "invalid compose role '$role'"
-    mkdir -p "$SDEV_HOME/core/$project"
-    dest="$SDEV_HOME/core/$project/$name"
-    if [[ "$source_spec" == *://* || "$source_spec" == git@* ]]; then
-        log "cloning $source_spec -> $dest"
-        if ! git clone "$source_spec" "$dest"; then
-            echo "  clone failed; skipping repo '$name'" >&2; continue
-        fi
-    elif [[ -d "$source_spec/.git" || -f "$source_spec/.git" ]]; then
-        # Existing local repo: symlink it in place as the worktree source.
-        abs="$(cd "$source_spec" && pwd)"
-        ln -s "$abs" "$dest"
-        log "linked existing repo $abs -> $dest"
-    elif [[ -e "$source_spec" ]]; then
-        echo "  '$source_spec' exists but is not a git repo (no .git); skipping '$name'" >&2; continue
+    if out="$(add_repo_source "$project" "$name" "$source_spec")"; then
+        log "$out repo '$name'"
     else
-        echo "  '$source_spec' is not a git URL or an existing local repo; skipping '$name'" >&2; continue
+        echo "  skipping repo '$name'" >&2
+        continue
     fi
     R_NAME+=("$name"); R_BASE+=("$base"); R_ROLE+=("$role")
 done
