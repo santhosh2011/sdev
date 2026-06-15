@@ -14,6 +14,11 @@ A small CLI for running many **isolated, parallel docker-compose workspaces** �
 - **[yq](https://github.com/mikefarah/yq) v4** (`brew install yq`)
 - **docker** + compose (Docker Desktop or OrbStack)
 
+> **Platforms:** macOS and Linux (incl. WSL). The installer detects your shell rc
+> (`.zshrc`/`.bashrc`/`.profile`). `sdev open` launches a browser on macOS and
+> prints the URL elsewhere. Repo base branches default to `main` — set
+> `master`/`develop` per repo in `sdev init`/`sdev edit`.
+
 ## Install (from the zip)
 
 You'll receive a `sdev-<version>.zip`. Then:
@@ -22,6 +27,12 @@ You'll receive a `sdev-<version>.zip`. Then:
 unzip sdev-<version>.zip
 cd sdev
 ./install        # checks deps, installs the tool, asks where your project home lives, links `sdev`
+```
+
+To verify the download before installing:
+
+```bash
+shasum -a 256 -c sdev-<version>.zip.sha256
 ```
 
 When run interactively, `./install` **prompts for your project home** (where projects, configs, and repos live; default `~/.sdev`), validates the path, then persists `export SDEV_HOME` and `PATH` into your shell rc inside an idempotent `# >>> sdev >>>` block. Set `SDEV_HOME` in the environment beforehand to skip the prompt (CI / scripted installs) — in that case the installer leaves your rc untouched and just prints the `PATH` line if needed.
@@ -43,7 +54,35 @@ sdev init
 
 `sdev init` asks for a project name, your repos (git URL or local checkout), branches, and compose roles. It writes `~/.sdev/core/projects.d/<name>.yml`, clones/links the repos under `~/.sdev/core/<name>/`, seeds `~/.sdev/confs/<name>/<prefix>.local.env`, and prints the exact commands to bring a stack up.
 
-To edit a project later, open its YAML in `~/.sdev/core/projects.d/`.
+To change a project later — add or remove a repo, or edit its conf prefix, shell service, or stack — run `sdev edit <project>` (an interactive menu). Removing a repo that still has live task worktrees is refused unless you confirm; cloned sources are kept unless you pass `--delete-source` (symlinked local repos are only unlinked, never deleted).
+
+### Pointing at an existing local clone
+
+When you give `sdev init`/`sdev edit` a **path** (not a URL), sdev *symlinks*
+that repo as the worktree source — it is not copied. Notes:
+
+- `sdev new` fetches `origin/<base>` before branching, so the local repo needs a
+  real `origin`. Use `sdev new <slug> --no-fetch` to skip the fetch (offline, or
+  no remote).
+- Don't move or delete the original — task worktrees branch off it and will break.
+- `sdev edit` → remove only *unlinks* the symlink; your repo is untouched.
+
+## Modeling your stack
+
+A new project inherits the default compose template — a generic
+`db + redis + api + ui + nginx` stack with **placeholder** images (`sdev up`
+runs, but `api`/`ui` are stubs until you point them at your images). Two knobs:
+
+- **`stack_services`** (set in `sdev init`/`sdev edit`, or the project YAML):
+  the host-exposed services that get a port offset. Trim it to what you have —
+  a single API → `[api]`.
+- **`template:`** in `core/projects.d/<project>.yml`: point at your own
+  `core/<project>/docker-compose.tmpl` to model a real stack. Each repo's
+  `compose_role` maps it to a compose service (the role names the service the
+  repo's worktree is mounted into).
+
+Your repos need a Docker setup (image or `build:` context) matching those roles
+for `sdev up` to run your actual app.
 
 ## Daily use
 
@@ -52,6 +91,7 @@ To edit a project later, open its YAML in `~/.sdev/core/projects.d/`.
 | `sdev projects` | list all defined projects |
 | `sdev use <project>` | pin the active project for this terminal |
 | `sdev -p <project> <cmd>` | run one command against a project (overrides the pin) |
+| `sdev edit [<project>]` | add/remove repos, edit conf prefix / shell service / stack services |
 | `sdev new <slug>` | create a task (worktrees + stack) under the active project |
 | `sdev up <slug>` | start the task's stack (`docker-compose up -d`) |
 | `sdev ps / logs / shell <slug>` | status / tail logs / exec a shell in the shell service |
@@ -87,6 +127,24 @@ sdev migrate --from /path/to/old/sdev-clone
 ```
 
 > Note: end any open tasks before migrating — migrated live worktrees point at the old repo and may need to be recreated with `sdev new`.
+
+## Troubleshooting
+
+- **`docker: command not found` / daemon errors on `sdev up`:** start Docker
+  Desktop or OrbStack; sdev shells out to `docker compose`/`docker-compose`.
+- **"port is already allocated":** another task or app holds the port. Each task
+  gets a unique offset; stop a conflicting task (`sdev down <slug>`) or an
+  unrelated process. Ports are listed by `sdev ls`.
+- **macOS: "bash >= 4 required":** macOS ships bash 3.2. `brew install bash`
+  (sdev's scripts use `#!/usr/bin/env bash`, so a newer bash on `PATH` is used).
+- **`yq` errors / wrong output:** sdev needs **mikefarah `yq` v4**, not the
+  Python `yq`. Check `yq --version`; install via `brew install yq`.
+- **"task '<slug>' not found in project '<project>'":** you're in a different
+  active project. Check `sdev use` and pass `-p <project>` or `sdev use <project>`.
+- **Staging prompt blocks `sdev up`:** `staging` tasks require typing `staging`
+  to confirm (they touch real staging data). Pass `--yes` for non-interactive use.
+- **`sdev init`/`sdev edit` re-run:** `init` refuses to overwrite an existing
+  project; use `sdev edit` to change one.
 
 ## License
 
