@@ -13,6 +13,7 @@ teardown() { rm -rf "$WORKSPACE_ROOT" "$(dirname "$SDEV_TARGET")" "$(dirname "$S
 acme
 app
 api
+
 svc
 $SRC
 main
@@ -38,6 +39,7 @@ acme
 app
 api
 
+
 EOF
   [ "$status" -ne 0 ]
 }
@@ -49,6 +51,7 @@ EOF
 acme
 app
 api
+
 api
 ~/work/api
 main
@@ -68,6 +71,7 @@ EOF
 acme
 app
 api
+
 svc
 $SRC
 main
@@ -79,6 +83,7 @@ EOF
 acme
 app
 api
+
 svc
 $SRC
 main
@@ -86,4 +91,38 @@ api
 
 EOF
   [ "$status" -ne 0 ]
+}
+
+@test "init writes stack_services when provided" {
+  run env SDEV_HOME="$SDEV_TARGET" "$WORKSPACE_ROOT/bin/init" <<EOF
+acme
+app
+api
+api,db
+svc
+$SRC
+main
+api
+
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r '.stack_services | join(",")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "api,db" ]
+}
+
+@test "init omits stack_services on blank (inherits global)" {
+  run env SDEV_HOME="$SDEV_TARGET" "$WORKSPACE_ROOT/bin/init" <<EOF
+acme
+app
+api
+
+svc
+$SRC
+main
+api
+
+EOF
+  [ "$status" -eq 0 ]
+  run yq -r 'has("stack_services")' "$SDEV_TARGET/core/projects.d/acme.yml"
+  [ "$output" = "false" ]
 }

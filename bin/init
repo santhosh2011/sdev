@@ -29,6 +29,15 @@ valid_token "$conf_prefix" || die "invalid conf prefix '$conf_prefix' (allowed: 
 shell_service="$(ask 'Shell service (compose service for `sdev shell`)' api)"
 valid_token "$shell_service" || die "invalid shell service '$shell_service'"
 
+stack_services="$(ask 'Stack services (host-exposed, comma/space separated; blank = inherit default)' '')"
+declare -a STACK=()
+if [[ -n "$stack_services" ]]; then
+    for s in ${stack_services//,/ }; do
+        valid_token "$s" || die "invalid stack service '$s'"
+        STACK+=("$s")
+    done
+fi
+
 declare -a R_NAME=() R_BASE=() R_ROLE=()
 while :; do
     name="$(ask 'Repo name (blank to finish)')"
@@ -55,6 +64,12 @@ done
 {
     echo "conf_prefix: $conf_prefix"
     echo "default_shell_service: $shell_service"
+    if [[ ${#STACK[@]} -gt 0 ]]; then
+        printf 'stack_services: ['
+        printf '%s' "${STACK[0]}"
+        for ((i=1; i<${#STACK[@]}; i++)); do printf ', %s' "${STACK[$i]}"; done
+        printf ']\n'
+    fi
     echo "repos:"
     for i in "${!R_NAME[@]}"; do
         echo "  ${R_NAME[$i]}:"
