@@ -22,16 +22,6 @@ project="${1:-$(resolve_project "${SDEV_PROJECT:-}")}"
 proj_file="$(project_config_file "$project")"
 [[ -f "$proj_file" ]] || die "project '$project' not found — create it with: sdev init"
 
-ask() {   # $1=label $2=default(optional)
-    local label="$1" def="${2:-}" ans
-    if [[ -n "$def" ]]; then printf '%s [%s]: ' "$label" "$def" >&2
-    else printf '%s: ' "$label" >&2; fi
-    read -r ans || ans=""
-    echo "${ans:-$def}"
-}
-valid_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
-valid_ref()   { [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]; }
-
 show() {
     echo ""
     echo "Project: $project  ($proj_file)"
@@ -77,6 +67,7 @@ add_repo() {
 
 remove_repo() {
     local name; name="$(ask 'Repo to remove')"
+    if ! valid_token "$name"; then echo "  invalid repo name '$name'" >&2; return 0; fi
     if ! yq -e ".repos | has(\"$name\")" "$proj_file" >/dev/null 2>&1; then
         echo "  no such repo '$name'" >&2; return 0
     fi
@@ -99,8 +90,11 @@ remove_repo() {
         local src; src="$(repo_source_dir "$project" "$p")"
         local w
         for w in "${wts[@]}"; do
-            git -C "$src" worktree remove --force "$w" 2>/dev/null || true
-            echo "    removed worktree $w (branch kept)" >&2
+            if git -C "$src" worktree remove --force "$w" 2>/dev/null; then
+                echo "    removed worktree $w (branch kept)" >&2
+            else
+                echo "    ⚠ could not remove worktree $w — remove it manually" >&2
+            fi
         done
     fi
 

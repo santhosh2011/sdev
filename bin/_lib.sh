@@ -226,6 +226,17 @@ validate_slug() {
     [[ "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] && [[ ${#slug} -le 50 ]]
 }
 
+# Prompt to stderr, echo the answer (or default) to stdout. Used by init/edit.
+ask() {   # $1=label $2=default(optional)
+    local label="$1" def="${2:-}" ans
+    if [[ -n "$def" ]]; then printf '%s [%s]: ' "$label" "$def" >&2
+    else printf '%s: ' "$label" >&2; fi
+    read -r ans || ans=""
+    echo "${ans:-$def}"
+}
+valid_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }   # conf prefix, shell service, compose role, service
+valid_ref()   { [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]; }  # git base branch (allows '/')
+
 compute_next_offset() {
     local step; step="$(global_get '.defaults.port_step')"
     local used=()

@@ -7,18 +7,6 @@ source "$SCRIPT_DIR/_lib.sh"
 
 ensure_home
 
-# Prompt to stderr, echo the answer (or default) to stdout.
-ask() {   # $1=label $2=default(optional)
-    local label="$1" def="${2:-}" ans
-    if [[ -n "$def" ]]; then printf '%s [%s]: ' "$label" "$def" >&2
-    else printf '%s: ' "$label" >&2; fi
-    read -r ans || ans=""
-    echo "${ans:-$def}"
-}
-
-valid_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }   # conf prefix, shell service, compose role
-valid_ref()   { [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]; }  # git base branch (allows '/')
-
 project="$(ask 'Project name (kebab-case)')"
 validate_slug "$project" || die "invalid project name '$project' — kebab-case, 1-50 chars"
 proj_file="$PROJECTS_DIR/$project.yml"
