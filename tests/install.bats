@@ -25,6 +25,14 @@ run_install_prompt() {
       bash "$REPO/install"
 }
 
+# Non-interactive install with the Claude opt-in decided by SDEV_CLAUDE.
+run_install_claude() {
+  env -u WORKSPACE_ROOT HOME="$FAKEHOME" SHELL=/bin/zsh \
+      SDEV_INSTALL="$INST" SDEV_HOME="$HOMEDIR" SDEV_BIN_DIR="$BINDIR" \
+      SDEV_CLAUDE="$1" \
+      bash "$REPO/install"
+}
+
 @test "install places tool, seeds home, links sdev" {
   run run_install
   [ "$status" -eq 0 ]
@@ -93,4 +101,32 @@ run_install_prompt() {
   run grep -c ">>> sdev >>>" "$FAKEHOME/.zshrc"
   [ "$output" -eq 1 ]
   rm -rf "$(dirname "$PICK")"
+}
+
+@test "claude: SDEV_CLAUDE=1 installs skill + command into ~/.claude" {
+  run run_install_claude 1
+  [ "$status" -eq 0 ]
+  [ -f "$FAKEHOME/.claude/skills/sdev/SKILL.md" ]
+  [ -f "$FAKEHOME/.claude/commands/sdev-start.md" ]
+}
+
+@test "claude: SDEV_CLAUDE=0 skips the Claude install" {
+  run run_install_claude 0
+  [ "$status" -eq 0 ]
+  [ ! -e "$FAKEHOME/.claude/skills/sdev" ]
+  [ ! -e "$FAKEHOME/.claude/commands/sdev-start.md" ]
+}
+
+@test "claude: non-interactive with no opt-in does not create ~/.claude" {
+  run run_install
+  [ "$status" -eq 0 ]
+  [ ! -e "$FAKEHOME/.claude" ]
+}
+
+@test "claude: existing ~/.claude is not auto-populated without opt-in" {
+  mkdir -p "$FAKEHOME/.claude"
+  run run_install
+  [ "$status" -eq 0 ]
+  [ ! -e "$FAKEHOME/.claude/skills/sdev" ]
+  [ ! -e "$FAKEHOME/.claude/commands/sdev-start.md" ]
 }
