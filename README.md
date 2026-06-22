@@ -114,6 +114,23 @@ sdev open login-fix
 
 Pin different projects in different terminals (`sdev use acme` here, `sdev use beta` there). Port offsets are allocated from a single global pool across every project, so multiple stacks can be `up` simultaneously with no host-port collisions.
 
+## Claude Code integration
+
+sdev ships an optional [Claude Code](https://claude.com/claude-code) **skill** and
+**slash-command**. When you run `./install` and a `~/.claude` directory is present,
+the installer asks whether to add them:
+
+- **`sdev` skill** (`~/.claude/skills/sdev/`) — teaches Claude the full sdev
+  workflow (project setup and the task lifecycle), so it can drive the tool for you.
+- **`/sdev-start <slug> [description]`** (`~/.claude/commands/sdev-start.md`) — takes
+  a feature from zero to a running, isolated workspace: creates the task, brings the
+  stack up, records the scope, and reports the URL.
+
+Decline the prompt (or run with no `~/.claude`) and nothing is written. For scripted
+installs, set `SDEV_CLAUDE=1` to install them or leave it unset to skip. They are
+refreshed on each upgrade and live alongside your other Claude config — the
+installer only writes the two `sdev`-owned paths.
+
 ## Upgrading
 
 Unzip the newer `sdev-<version>.zip` and re-run `./install`. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced.

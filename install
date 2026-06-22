@@ -84,6 +84,29 @@ persist_rc() {
     say "✓ wired exports into $rc — restart your shell or run: source $rc"
 }
 
+# Optionally install the sdev Claude Code skill + command into ~/.claude.
+# SDEV_CLAUDE (1/true/yes/y = install, anything else = skip) wins; otherwise, on a
+# real TTY with an existing ~/.claude, prompt. Never auto-installs uninvited, and
+# only ever writes the two sdev-owned paths.
+maybe_install_claude() {
+    local src="$INSTALL_DIR/claude"
+    [[ -d "$src" ]] || return 0
+    local do_it=0 reply=""
+    if [[ -n "${SDEV_CLAUDE:-}" ]]; then
+        case "$SDEV_CLAUDE" in 1|true|yes|y|Y) do_it=1 ;; *) do_it=0 ;; esac
+    elif [[ -t 0 && -d "$HOME/.claude" ]]; then
+        printf 'Install sdev Claude Code skill + command into ~/.claude? [Y/n]: ' >&2
+        IFS= read -r reply || reply=""
+        case "$reply" in [Nn]*) do_it=0 ;; *) do_it=1 ;; esac
+    fi
+    [[ $do_it -eq 1 ]] || return 0
+    mkdir -p "$HOME/.claude/skills" "$HOME/.claude/commands"
+    rm -rf "${HOME:?}/.claude/skills/sdev"
+    cp -R "$src/skills/sdev" "$HOME/.claude/skills/sdev"
+    cp "$src/commands/sdev-start.md" "$HOME/.claude/commands/sdev-start.md"
+    say "✓ installed sdev Claude skill + command into ~/.claude (skills/sdev, commands/sdev-start.md)"
+}
+
 # --- 1. dependency check ----------------------------------------------------
 os="$(uname -s)"
 ok=1
@@ -129,7 +152,7 @@ if [[ "$SRC_DIR" == "$INSTALL_DIR" ]]; then
     say "✓ tool already at $INSTALL_DIR (running from install dir; skipping copy)"
 else
     mkdir -p "$INSTALL_DIR"
-    for item in bin core README.md LICENSE VERSION confs install; do
+    for item in bin core README.md LICENSE VERSION confs install claude; do
         [[ -e "$SRC_DIR/$item" ]] || continue
         rm -rf "${INSTALL_DIR:?}/$item"
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
@@ -195,6 +218,9 @@ else
             ;;
     esac
 fi
+
+# --- 6. optional: Claude Code skill + command ------------------------------
+maybe_install_claude
 
 cat <<EOF
 
