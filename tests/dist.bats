@@ -36,3 +36,12 @@ teardown() { rm -rf "$OUT"; }
   [ -f "$zipfile.sha256" ]
   ( cd "$(dirname "$zipfile")" && shasum -a 256 -c "$(basename "$zipfile").sha256" )
 }
+
+@test "dist ships the Claude skill + command" {
+  run bash "$REPO/dist" "$OUT"
+  [ "$status" -eq 0 ]
+  zipfile="$output"
+  listing="$(unzip -Z1 "$zipfile")"
+  echo "$listing" | grep -qx 'sdev/claude/skills/sdev/SKILL.md'
+  echo "$listing" | grep -qx 'sdev/claude/commands/sdev-start.md'
+}

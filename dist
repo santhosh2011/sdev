@@ -31,6 +31,11 @@ if [[ -d "$REPO_DIR/confs" ]]; then
     done < <(find "$REPO_DIR/confs" -type f -name '*.example')
 fi
 
+# claude/: optional Claude Code skill + slash-command (tool-owned).
+if [[ -d "$REPO_DIR/claude" ]]; then
+    cp -R "$REPO_DIR/claude" "$PKG/claude"
+fi
+
 mkdir -p "$OUT_DIR"
 ZIP="$(cd "$OUT_DIR" && pwd)/sdev-$VERSION.zip"
 rm -f "$ZIP"
