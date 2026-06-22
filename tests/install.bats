@@ -26,6 +26,9 @@ run_install_prompt() {
 }
 
 # Non-interactive install with the Claude opt-in decided by SDEV_CLAUDE.
+# Note: the interactive [Y/n] prompt branch in maybe_install_claude ([[ -t 0 ]])
+# is intentionally exercised only via SDEV_CLAUDE env paths below, since bats
+# pipes stdin so -t 0 is false, and the prompt branch shares the same copy code.
 run_install_claude() {
   env -u WORKSPACE_ROOT HOME="$FAKEHOME" SHELL=/bin/zsh \
       SDEV_INSTALL="$INST" SDEV_HOME="$HOMEDIR" SDEV_BIN_DIR="$BINDIR" \

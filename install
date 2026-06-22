@@ -91,7 +91,7 @@ persist_rc() {
 maybe_install_claude() {
     local src="$INSTALL_DIR/claude"
     [[ -d "$src" ]] || return 0
-    local do_it=0
+    local do_it=0 reply=""
     if [[ -n "${SDEV_CLAUDE:-}" ]]; then
         case "$SDEV_CLAUDE" in 1|true|yes|y|Y) do_it=1 ;; *) do_it=0 ;; esac
     elif [[ -t 0 && -d "$HOME/.claude" ]]; then
