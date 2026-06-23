@@ -124,6 +124,14 @@ config_shell_service() {   # $1=project -> compose service name to exec into
     if [[ -n "$v" && "$v" != "null" ]]; then echo "$v"; else echo "api"; fi
 }
 
+# Whether new-task should wire sdev Claude hooks into the task's settings.
+# Default enabled; a project opts out with `hooks: false`.
+config_hooks_enabled() {   # $1=project
+    local v; v="$(yq -r '.hooks | . == false' "$(effective_project_file "$1")")"
+    [[ "$v" == "true" ]] && return 1
+    return 0
+}
+
 # ---- project resolution --------------------------------------------------------
 
 # Stable per-terminal key for the session-scoped active-project pointer.
