@@ -15,6 +15,7 @@ find_task_dir() {
   local d="$1"
   while [[ -n "$d" && "$d" != "/" ]]; do
     if [[ -f "$d/.env" && -f "$d/CLAUDE.md" ]] \
+       && grep -q '^COMPOSE_PROJECT_NAME=' "$d/.env" 2>/dev/null \
        && grep -q '^PORT_OFFSET=' "$d/.env" 2>/dev/null; then
       printf '%s' "$d"; return 0
     fi

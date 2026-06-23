@@ -22,6 +22,8 @@ printf '%s' "$cmd" | grep -Eq -- '(^|[[:space:]])--yes([[:space:]]|$)' && allow
 
 # Resolve the target profile.
 profile=""
+# Bad/missing cwd: leave empty so find_task_dir finds no profile (the explicit
+# 'staging' token check below still applies); never fall back to $PWD.
 [[ -n "$cwd" && -d "$cwd" ]] || cwd=""
 find_task_dir() {
   local d="$1"
