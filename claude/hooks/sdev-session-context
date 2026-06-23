@@ -10,7 +10,7 @@ command -v yq >/dev/null 2>&1 || none
 input="$(cat 2>/dev/null || true)"
 [[ -n "$input" ]] || none
 cwd="$(printf '%s' "$input" | yq -p=json -r '.cwd // ""' 2>/dev/null || true)"
-[[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
+[[ -n "$cwd" && -d "$cwd" ]] || none
 
 # Nearest ancestor that looks like an sdev task dir: has a .env with
 # COMPOSE_PROJECT_NAME + PORT_OFFSET and a sibling CLAUDE.md.
