@@ -133,3 +133,41 @@ run_install_claude() {
   [ ! -e "$FAKEHOME/.claude/skills/sdev" ]
   [ ! -e "$FAKEHOME/.claude/commands/sdev-start.md" ]
 }
+
+@test "claude: SDEV_CLAUDE=1 merges the staging-guard into ~/.claude/settings.json" {
+  run run_install_claude 1
+  [ "$status" -eq 0 ]
+  s="$FAKEHOME/.claude/settings.json"
+  [ -f "$s" ]
+  run bash -c "yq -p=json -r '[.hooks.PreToolUse[].hooks[].command] | join(\",\")' \"$s\" 2>/dev/null"
+  [[ "$output" == *"claude/hooks/sdev-staging-guard"* ]]
+}
+
+@test "claude: global staging-guard merge is idempotent (no duplicate)" {
+  run run_install_claude 1
+  [ "$status" -eq 0 ]
+  run run_install_claude 1
+  [ "$status" -eq 0 ]
+  s="$FAKEHOME/.claude/settings.json"
+  run bash -c "yq -p=json -r '[.hooks.PreToolUse[].hooks[].command | select(. == \"$INST/claude/hooks/sdev-staging-guard\")] | length' \"$s\" 2>/dev/null"
+  [ "$output" = "1" ]
+}
+
+@test "claude: global merge preserves an existing unrelated hook" {
+  mkdir -p "$FAKEHOME/.claude"
+  cat > "$FAKEHOME/.claude/settings.json" <<'JSON'
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/my-own-hook"}]}]}}
+JSON
+  run run_install_claude 1
+  [ "$status" -eq 0 ]
+  s="$FAKEHOME/.claude/settings.json"
+  run bash -c "yq -p=json -r '[.hooks.PreToolUse[].hooks[].command] | join(\",\")' \"$s\" 2>/dev/null"
+  [[ "$output" == *"/usr/local/bin/my-own-hook"* ]]
+  [[ "$output" == *"sdev-staging-guard"* ]]
+}
+
+@test "claude: no opt-in does not create ~/.claude/settings.json" {
+  run run_install
+  [ "$status" -eq 0 ]
+  [ ! -e "$FAKEHOME/.claude/settings.json" ]
+}

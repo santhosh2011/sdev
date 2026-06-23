@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Claude Code PostToolUse(Edit|Write) hook (sdev). Inside a task workspace, remind
+# that edits need a stack (re)start. Self-gating: silent exit 0 otherwise.
+set -uo pipefail
+
+none() { exit 0; }
+command -v yq >/dev/null 2>&1 || none
+
+input="$(cat 2>/dev/null || true)"
+[[ -n "$input" ]] || none
+cwd="$(printf '%s' "$input" | yq -p=json -r '.cwd // ""' 2>/dev/null || true)"
+[[ -n "$cwd" && -d "$cwd" ]] || none
+
+find_task_dir() {
+  local d="$1"
+  while [[ -n "$d" && "$d" != "/" ]]; do
+    if [[ -f "$d/.env" && -f "$d/CLAUDE.md" ]] \
+       && grep -q '^COMPOSE_PROJECT_NAME=' "$d/.env" 2>/dev/null \
+       && grep -q '^PORT_OFFSET=' "$d/.env" 2>/dev/null; then
+      printf '%s' "$d"; return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  return 1
+}
+
+td="$(find_task_dir "$cwd")" || none
+slug="$(basename "$td")"
+
+MSG="sdev: edits in task '$slug' take effect only after its stack is (re)started — run 'sdev up $slug'."
+M="$MSG" yq -n -o=json \
+  '.hookSpecificOutput.hookEventName = "PostToolUse" | .hookSpecificOutput.additionalContext = strenv(M)' \
+  2>/dev/null || none

@@ -45,3 +45,13 @@ teardown() { rm -rf "$OUT"; }
   echo "$listing" | grep -qx 'sdev/claude/skills/sdev/SKILL.md'
   echo "$listing" | grep -qx 'sdev/claude/commands/sdev-start.md'
 }
+
+@test "dist ships the hook scripts" {
+  run bash "$REPO/dist" "$OUT"
+  [ "$status" -eq 0 ]
+  zipfile="$output"
+  listing="$(unzip -Z1 "$zipfile")"
+  echo "$listing" | grep -qx 'sdev/claude/hooks/sdev-session-context'
+  echo "$listing" | grep -qx 'sdev/claude/hooks/sdev-staging-guard'
+  echo "$listing" | grep -qx 'sdev/claude/hooks/sdev-edit-reminder'
+}

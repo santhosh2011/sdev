@@ -24,6 +24,10 @@ make_fixture() {
        "$REPO_BIN"/list-tasks "$REPO_BIN"/end-task "$REPO_BIN"/migrate \
        "$REPO_BIN"/init "$REPO_BIN"/edit-project "$WORKSPACE_ROOT/bin/"
     cp -R "$REPO_BIN/templates" "$WORKSPACE_ROOT/bin/templates"
+    # Ship the Claude hook scripts into the fixture so $SDEV_INSTALL/claude/hooks
+    # resolves (SDEV_INSTALL = parent of bin = $WORKSPACE_ROOT).
+    cp -R "$REPO_BIN/../claude" "$WORKSPACE_ROOT/claude"
+    chmod +x "$WORKSPACE_ROOT/claude/hooks/"* 2>/dev/null || true
     chmod +x "$WORKSPACE_ROOT/bin/"*
 
     cat > "$WORKSPACE_ROOT/core/.task-config.yml" <<'YAML'

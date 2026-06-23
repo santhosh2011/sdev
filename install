@@ -105,6 +105,33 @@ maybe_install_claude() {
     cp -R "$src/skills/sdev" "$HOME/.claude/skills/sdev"
     cp "$src/commands/sdev-start.md" "$HOME/.claude/commands/sdev-start.md"
     say "✓ installed sdev Claude skill + command into ~/.claude (skills/sdev, commands/sdev-start.md)"
+    merge_global_staging_guard
+}
+
+# Idempotently merge ONLY the staging-guard PreToolUse hook into the user's
+# global ~/.claude/settings.json. Non-destructive (preserves other settings and
+# hooks), creates the file if absent. Requires yq.
+merge_global_staging_guard() {
+    local guard="$INSTALL_DIR/claude/hooks/sdev-staging-guard"
+    [[ -f "$guard" ]] || return 0
+    if ! command -v yq >/dev/null 2>&1; then
+        warn "⚠️  yq missing — skipped the global sdev staging-guard hook."
+        return 0
+    fi
+    local settings="$HOME/.claude/settings.json"
+    mkdir -p "$HOME/.claude"
+    [[ -f "$settings" ]] || printf '{}\n' > "$settings"
+    # Append only if our guard command is not already registered.
+    local present
+    present="$(GUARD="$guard" yq -p=json -r \
+        '[.hooks.PreToolUse[]?.hooks[]?.command] | contains([strenv(GUARD)])' \
+        "$settings" 2>/dev/null || echo false)"
+    if [[ "$present" != "true" ]]; then
+        GUARD="$guard" yq -p=json -o=json -i \
+            '.hooks.PreToolUse = (.hooks.PreToolUse // []) + [{"matcher": "Bash", "hooks": [{"type": "command", "command": strenv(GUARD)}]}]' \
+            "$settings"
+        say "✓ merged sdev staging-guard hook into ~/.claude/settings.json"
+    fi
 }
 
 # --- 1. dependency check ----------------------------------------------------
@@ -158,6 +185,7 @@ else
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
     done
     chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/claude/hooks/"* 2>/dev/null || true
     chmod +x "$INSTALL_DIR/install" 2>/dev/null || true
     say "✓ tool installed to $INSTALL_DIR"
 fi

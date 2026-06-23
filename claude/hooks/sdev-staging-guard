@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Claude Code PreToolUse(Bash) hook (sdev). Deny bringing up a STAGING stack
+# without explicit confirmation. Self-gating: allow (silent exit 0) otherwise.
+set -uo pipefail
+
+allow() { exit 0; }
+command -v yq >/dev/null 2>&1 || allow
+
+input="$(cat 2>/dev/null || true)"
+[[ -n "$input" ]] || allow
+cmd="$(printf '%s' "$input" | yq -p=json -r '.tool_input.command // ""' 2>/dev/null || true)"
+cwd="$(printf '%s' "$input" | yq -p=json -r '.cwd // ""' 2>/dev/null || true)"
+[[ -n "$cmd" ]] || allow
+
+# Only inspect commands that bring a stack up.
+printf '%s' "$cmd" | grep -Eq \
+  '(sdev[[:space:]]+(.*[[:space:]])?up([[:space:]]|$)|docker[[:space:]]+compose[[:space:]]+up|docker-compose[[:space:]]+up|(^|[[:space:]])\./compose[[:space:]]+up)' \
+  || allow
+
+# Explicit human opt-in token -> allow.
+printf '%s' "$cmd" | grep -Eq -- '(^|[[:space:]])--yes([[:space:]]|$)' && allow
+
+# Resolve the target profile.
+profile=""
+# Bad/missing cwd: leave empty so find_task_dir finds no profile (the explicit
+# 'staging' token check below still applies); never fall back to $PWD.
+[[ -n "$cwd" && -d "$cwd" ]] || cwd=""
+find_task_dir() {
+  local d="$1"
+  while [[ -n "$d" && "$d" != "/" ]]; do
+    if [[ -f "$d/.env" ]] \
+       && grep -q '^APP_ENV=' "$d/.env" 2>/dev/null \
+       && grep -q '^COMPOSE_PROJECT_NAME=' "$d/.env" 2>/dev/null; then
+      printf '%s' "$d"; return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  return 1
+}
+if td="$(find_task_dir "$cwd")"; then
+  profile="$(grep '^APP_ENV=' "$td/.env" | head -1 | cut -d= -f2 || true)"
+fi
+# An explicit staging token in the command also trips the guard.
+printf '%s' "$cmd" | grep -Eqw 'staging' && profile="staging"
+
+[[ "$profile" == "staging" ]] || allow
+
+reason="Refusing to bring up a STAGING stack from an agent — staging touches real data. Run it yourself in the terminal (sdev will ask you to type 'staging' to confirm), or re-run with --yes if you have already confirmed this is intended."
+REASON="$reason" yq -n -o=json \
+  '.hookSpecificOutput.hookEventName = "PreToolUse" | .hookSpecificOutput.permissionDecision = "deny" | .hookSpecificOutput.permissionDecisionReason = strenv(REASON)' \
+  2>/dev/null || allow

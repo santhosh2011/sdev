@@ -200,7 +200,21 @@ if [[ "$PROFILE" == staging ]]; then
 fi
 
 mkdir -p "$TASK_DIR/.claude"
-cp "$SCRIPT_DIR/templates/settings.local.json.tmpl" "$TASK_DIR/.claude/settings.local.json"
+settings_file="$TASK_DIR/.claude/settings.local.json"
+hooks_dir="$SDEV_INSTALL/claude/hooks"
+if config_hooks_enabled "$PROJECT" && [[ -d "$hooks_dir" ]]; then
+    SC="$hooks_dir/sdev-session-context" \
+    SG="$hooks_dir/sdev-staging-guard" \
+    ER="$hooks_dir/sdev-edit-reminder" \
+    yq -n -o=json '
+      .additionalDirectories = [] |
+      .hooks.SessionStart = [{"matcher": "startup|resume", "hooks": [{"type": "command", "command": strenv(SC)}]}] |
+      .hooks.PreToolUse   = [{"matcher": "Bash",           "hooks": [{"type": "command", "command": strenv(SG)}]}] |
+      .hooks.PostToolUse  = [{"matcher": "Edit|Write",     "hooks": [{"type": "command", "command": strenv(ER)}]}]
+    ' > "$settings_file"
+else
+    cp "$SCRIPT_DIR/templates/settings.local.json.tmpl" "$settings_file"
+fi
 
 cat <<EOF
 

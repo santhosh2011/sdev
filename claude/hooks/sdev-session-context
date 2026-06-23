@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Claude Code SessionStart hook (sdev). When the session's cwd is inside an sdev
+# task workspace, inject the task identity as additionalContext. Self-gating:
+# silent exit 0 when not in a task dir, when yq is missing, or on bad input.
+set -uo pipefail
+
+none() { exit 0; }
+command -v yq >/dev/null 2>&1 || none
+
+input="$(cat 2>/dev/null || true)"
+[[ -n "$input" ]] || none
+cwd="$(printf '%s' "$input" | yq -p=json -r '.cwd // ""' 2>/dev/null || true)"
+[[ -n "$cwd" && -d "$cwd" ]] || none
+
+# Nearest ancestor that looks like an sdev task dir: has a .env with
+# COMPOSE_PROJECT_NAME + PORT_OFFSET and a sibling CLAUDE.md.
+find_task_dir() {
+  local d="$1"
+  while [[ -n "$d" && "$d" != "/" ]]; do
+    if [[ -f "$d/.env" && -f "$d/CLAUDE.md" ]] \
+       && grep -q '^COMPOSE_PROJECT_NAME=' "$d/.env" 2>/dev/null \
+       && grep -q '^PORT_OFFSET=' "$d/.env" 2>/dev/null; then
+      printf '%s' "$d"; return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  return 1
+}
+
+td="$(find_task_dir "$cwd")" || none
+
+# project/slug come from the path (.../projects/<project>/<slug>); slugs may
+# contain dashes so don't parse them out of COMPOSE_PROJECT_NAME.
+slug="$(basename "$td")"
+project="$(basename "$(dirname "$td")")"
+app_env="$(grep '^APP_ENV=' "$td/.env" | head -1 | cut -d= -f2 || true)"
+nginx_port="$(grep '^NGINX_HOST_PORT=' "$td/.env" | head -1 | cut -d= -f2 || true)"
+
+ctx="sdev task workspace — project '$project', task '$slug' (branch task/$slug, profile ${app_env:-?})."
+[[ -n "$nginx_port" ]] && ctx="$ctx Primary URL: http://localhost:$nginx_port/."
+ctx="$ctx Active project is '$project'; sdev commands target it. Use 'sdev ps $slug' for status, 'sdev up $slug' to start the stack, 'sdev open $slug' to open it."
+
+CTX="$ctx" yq -n -o=json \
+  '.hookSpecificOutput.hookEventName = "SessionStart" | .hookSpecificOutput.additionalContext = strenv(CTX)' \
+  2>/dev/null || none
