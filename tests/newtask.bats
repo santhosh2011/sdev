@@ -62,4 +62,7 @@ YAML
   run cat "$s"
   [[ "$output" != *"sdev-session-context"* ]]
   [[ "$output" != *"hooks"* ]]
+  # Positively confirm the fallback copied the plain template verbatim.
+  run diff "$s" "$WORKSPACE_ROOT/bin/templates/settings.local.json.tmpl"
+  [ "$status" -eq 0 ]
 }
