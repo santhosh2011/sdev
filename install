@@ -158,6 +158,7 @@ else
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
     done
     chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/claude/hooks/"* 2>/dev/null || true
     chmod +x "$INSTALL_DIR/install" 2>/dev/null || true
     say "✓ tool installed to $INSTALL_DIR"
 fi
