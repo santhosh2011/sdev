@@ -131,6 +131,28 @@ installs, set `SDEV_CLAUDE=1` to install them or leave it unset to skip. They ar
 refreshed on each upgrade and live alongside your other Claude config — the
 installer only writes the two `sdev`-owned paths.
 
+### Hooks
+
+sdev also ships three Claude Code hooks that make an agent safer and better
+oriented inside a task workspace:
+
+- **session-context** (SessionStart) — injects the task identity (project, slug,
+  branch, URL, ports) when Claude opens inside a task dir.
+- **staging-guard** (PreToolUse) — refuses an agent-issued `sdev up` against a
+  `staging` profile unless you pass `--yes`.
+- **edit-reminder** (PostToolUse) — notes that edits need `sdev up <slug>` to take
+  effect.
+
+The hooks are wired **per task by default**: `sdev new` writes them into the
+task's `.claude/settings.local.json`, so they fire only inside that workspace. A
+project opts out with `hooks: false` in its `core/projects.d/<project>.yml`.
+Already-created tasks are unaffected — recreate a task to adopt them.
+
+When you opt into the Claude integration at install time, the **staging-guard** is
+additionally merged into your global `~/.claude/settings.json` (idempotent,
+preserving your other hooks) so `sdev up` against staging is guarded even when run
+outside a task dir.
+
 ## Upgrading
 
 Unzip the newer `sdev-<version>.zip` and re-run `./install`. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced.
