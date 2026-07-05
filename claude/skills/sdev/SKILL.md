@@ -53,8 +53,11 @@ Pin a project first (`sdev use <project>`) or pass `-p <project>` per command.
 | `sdev open <slug>` | open the task's nginx URL |
 | `sdev code / cd <slug>` | open task dir in editor / print its path |
 | `sdev down / nuke <slug>` | stop (keep volumes) / stop + reclaim volumes |
-| `sdev ls` | list all tasks across projects |
-| `sdev end <slug>` | tear down + archive a finished task |
+| `sdev ls` | list all tasks across projects (shows lease/lock state) |
+| `sdev end <slug> [--pool]` | tear down + archive (or return worktree to the warm pool) |
+| `sdev lease <slug> [holder]` | durably reserve a task (survives with no process) |
+| `sdev release <slug>` | drop a task's lease + process-lock |
+| `sdev doctor` | check deps + state-ledger integrity |
 
 `sdev new` fetches `origin/<base>` and branches off the latest `origin/<base>`.
 Pass `--no-fetch` to skip the fetch (offline, or a local repo with no remote).
@@ -64,8 +67,18 @@ To go from zero to a running workspace in one step, use the `/sdev-start` comman
 ## Running in parallel
 
 Pin different projects in different terminals (`sdev use acme` here,
-`sdev use beta` there). Port offsets come from one global pool across every
-project, so multiple stacks run `up` at once with no host-port collisions.
+`sdev use beta` there). Port offsets are reserved from one lock-protected ledger
+(`$SDEV_HOME/state/state.yml`) across every project, so multiple stacks run `up`
+at once with no host-port collisions — even when several `sdev new` run
+concurrently.
+
+## Warm pool & leases
+
+- `sdev end <slug> --pool` keeps a task's worktree warm (deps/build caches intact)
+  instead of deleting it; the next `sdev new` for that repo reuses it, rebranded.
+- `sdev lease <slug>` durably reserves a task so a background agent holding it
+  across sessions is never auto-reclaimed; `sdev release` drops it. A dead
+  process-lock self-heals. `sdev ls` shows `[leased:…]` / `[lock:…]` state.
 
 ## Gotchas
 

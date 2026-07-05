@@ -10,11 +10,17 @@ PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 
 usage() {
     cat <<EOF
-Usage: new-task <slug> [--env local|dev|staging] [--repos api,ui] [--api-base qa] [--ui-base qa] [--no-fetch]
+Usage: new-task <slug> [--env local|dev|staging] [--repos api,ui] [--api-base qa] [--ui-base qa]
+                       [--no-fetch] [--no-pool] [--lease [holder]]
 
 Creates an isolated parallel-task workspace under projects/<project>/<slug>/.
 Each repo's task branch starts from the latest origin/<base> (fetched first);
 pass --no-fetch to skip the fetch and use whatever the source repo already has.
+
+Warm pool: if a matching worktree was returned by 'sdev end --pool', it is
+reused (deps/build caches intact) and re-branded to task/<slug>; pass --no-pool
+to always create fresh. --lease reserves the task durably (a background agent
+holding it across sessions is never auto-reclaimed).
 EOF
 }
 
@@ -22,6 +28,9 @@ SLUG=""
 REPOS_ARG=""
 ENV_PROFILE=""
 FETCH=1
+USE_POOL=1
+LEASE=0
+LEASE_HOLDER=""
 declare -A BASE_OVERRIDE=()
 
 while [[ $# -gt 0 ]]; do
@@ -30,6 +39,12 @@ while [[ $# -gt 0 ]]; do
         --repos) REPOS_ARG="$2"; shift 2 ;;
         --env) ENV_PROFILE="$2"; shift 2 ;;
         --no-fetch) FETCH=0; shift ;;
+        --no-pool) USE_POOL=0; shift ;;
+        --lease)
+            LEASE=1; shift
+            # optional holder label (anything not starting with '-')
+            if [[ $# -gt 0 && "$1" != -* ]]; then LEASE_HOLDER="$1"; shift; fi
+            ;;
         --*-base)
             key="${1#--}"; key="${key%-base}"
             BASE_OVERRIDE[$key]="$2"
@@ -39,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         *) [[ -z "$SLUG" ]] && SLUG="$1" || die "unexpected arg: $1"; shift ;;
     esac
 done
+[[ -z "$LEASE_HOLDER" ]] && LEASE_HOLDER="${SDEV_LEASE_HOLDER:-}"
 
 [[ -n "$SLUG" ]] || { usage; die "slug required"; }
 validate_slug "$SLUG" || die "invalid slug '$SLUG' — must be kebab-case, 1-50 chars"
@@ -106,19 +122,50 @@ for r in "${SELECTED[@]}"; do
     else
         die "$repo_path: base branch '$base' not found locally or on origin"
     fi
-    log "creating worktree $r ($repo_path) on branch task/$SLUG from $start_point"
+    mkdir -p "$(dirname "$TASK_DIR/$repo_path")"
 
-    git -C "$src" worktree add --no-track \
-        "$TASK_DIR/$repo_path" \
-        -b "task/$SLUG" "$start_point" >/dev/null
+    # Warm pool: reuse a returned worktree for this source if one exists.
+    # Re-brand it to task/<slug> at the fresh start point (tracked files reset,
+    # gitignored deps/build caches preserved). Fall back to a fresh worktree on
+    # any hiccup or an empty pool.
+    reused=0
+    if [[ $USE_POOL -eq 1 ]]; then
+        pooled="$(pool_take "$src")"
+        if [[ -n "$pooled" ]]; then
+            if [[ -d "$pooled" ]] \
+               && git -C "$src" worktree move "$pooled" "$TASK_DIR/$repo_path" 2>/dev/null \
+               && git -C "$TASK_DIR/$repo_path" checkout --no-track -B "task/$SLUG" "$start_point" >/dev/null 2>&1; then
+                reused=1
+                log "reused pooled worktree for $r ($repo_path) -> task/$SLUG"
+            else
+                # Reuse failed — discard the stale slot and create fresh below.
+                git -C "$src" worktree remove --force "$TASK_DIR/$repo_path" 2>/dev/null || true
+                rm -rf "${pooled:?}" "${TASK_DIR:?}/$repo_path" 2>/dev/null || true
+                log "warning: pooled reuse failed for $r — creating fresh"
+            fi
+        fi
+    fi
+
+    if [[ $reused -eq 0 ]]; then
+        log "creating worktree $r ($repo_path) on branch task/$SLUG from $start_point"
+        git -C "$src" worktree add --no-track \
+            "$TASK_DIR/$repo_path" \
+            -b "task/$SLUG" "$start_point" >/dev/null
+    fi
     CREATED+=("$r")
 done
 
 trap - ERR
 log "worktrees created: ${CREATED[*]}"
 
-OFFSET="$(compute_next_offset)"
+# Reserve a port offset from the central ledger under the state lock. The task
+# dir already exists (created above) so a concurrent `sdev new` reconciling the
+# ledger keeps this reservation — this is what closes the old scan race.
+OFFSET="$(allocate_offset "$PROJECT/$SLUG" "$LEASE" "$LEASE_HOLDER")" \
+    || die "could not allocate a port offset (state lock or ledger error)"
+[[ -n "$OFFSET" ]] || die "port offset allocation returned empty"
 log "port offset=$OFFSET"
+[[ $LEASE -eq 1 ]] && log "leased${LEASE_HOLDER:+ to $LEASE_HOLDER}"
 
 env_file="$TASK_DIR/.env"
 {
@@ -158,7 +205,7 @@ for r in "${SELECTED[@]}"; do
     rp="$(config_repo_path "$PROJECT" "$r")"
     src_nm="$(repo_source_dir "$PROJECT" "$rp")/node_modules"
     if [[ -d "$src_nm" ]]; then
-        ln -s "$src_nm" "$TASK_DIR/$rp/node_modules"
+        ln -sfn "$src_nm" "$TASK_DIR/$rp/node_modules"   # -f/-n: idempotent on pool reuse
     else
         log "warning: $src_nm missing — run npm install in the source repo first"
     fi
