@@ -273,10 +273,12 @@ compute_next_offset() {
 # ==============================================================================
 # $STATE_FILE (YAML) is the single source of truth for three things:
 #   tasks    : "<project>/<slug>" -> {offset, created_at, lease, lease_holder,
-#              pid, proc_token}. A task's port offset is RESERVED here under the
-#              lock, which eliminates the compute_next_offset scan race (two
-#              concurrent `sdev new` used to read the same free offset before
-#              either wrote its .env).
+#              pid, proc_token, ephemeral}. A task's port offset is RESERVED here
+#              under the lock, which eliminates the compute_next_offset scan race
+#              (two concurrent `sdev new` used to read the same free offset before
+#              either wrote its .env). `ephemeral` marks a durable-lease-free,
+#              short-lived slot eligible for automatic reclamation by `sdev prune`
+#              (torn down fully on end — never returned to the warm pool).
 #   pool     : warm worktrees returned by `sdev end --pool`, available for the
 #              next `sdev new` to re-brand instead of creating from scratch.
 #   pool_seq : monotonic counter naming pooled worktree dirs.
@@ -403,7 +405,7 @@ state_seed_from_env() {
         [[ -n "$key" ]] || continue
         K="$key" OFF="$off" TS="$(_now)" yq -i '
           .tasks[strenv(K)] = {"offset": (strenv(OFF)|tonumber), "created_at": strenv(TS),
-            "lease": false, "lease_holder": "", "pid": 0, "proc_token": ""}' "$STATE_FILE"
+            "lease": false, "lease_holder": "", "pid": 0, "proc_token": "", "ephemeral": false}' "$STATE_FILE"
     done < <(_live_env_files)
     yq -i '.seeded = true' "$STATE_FILE"
 }
@@ -446,14 +448,14 @@ _ensure_task_entry_locked() {   # $1=key
     [[ -n "$off" ]] || off=0
     K="$key" OFF="$off" TS="$(_now)" yq -i '
       .tasks[strenv(K)] = {"offset": (strenv(OFF)|tonumber), "created_at": strenv(TS),
-        "lease": false, "lease_holder": "", "pid": 0, "proc_token": ""}' "$STATE_FILE"
+        "lease": false, "lease_holder": "", "pid": 0, "proc_token": "", "ephemeral": false}' "$STATE_FILE"
 }
 
 # --- offset allocation --------------------------------------------------------
 # Reserve the first free port offset for KEY, recording it in the ledger. Runs
 # the full seed+reconcile cycle first. MUST run under the lock.
-_allocate_offset_locked() {   # $1=key  $2=lease(0/1)  $3=holder
-    local key="$1" want_lease="${2:-0}" holder="${3:-}"
+_allocate_offset_locked() {   # $1=key  $2=lease(0/1)  $3=holder  $4=ephemeral(0/1)
+    local key="$1" want_lease="${2:-0}" holder="${3:-}" want_eph="${4:-0}"
     state_init; state_seed_from_env; state_reconcile
     local step; step="$(global_get '.defaults.port_step')"
     # used = ledger offsets ∪ a fresh .env scan (defends against any on-disk task
@@ -470,19 +472,50 @@ _allocate_offset_locked() {   # $1=key  $2=lease(0/1)  $3=holder
         candidate=$((candidate + step))
     done
     local lease_bool="false"; [[ "$want_lease" == "1" ]] && lease_bool="true"
-    K="$key" OFF="$candidate" TS="$(_now)" LB="$lease_bool" HLD="$holder" yq -i '
+    local eph_bool="false"; [[ "$want_eph" == "1" ]] && eph_bool="true"
+    K="$key" OFF="$candidate" TS="$(_now)" LB="$lease_bool" HLD="$holder" EPH="$eph_bool" yq -i '
       .tasks[strenv(K)] = {"offset": (strenv(OFF)|tonumber), "created_at": strenv(TS),
         "lease": (strenv(LB)=="true"), "lease_holder": strenv(HLD),
-        "pid": 0, "proc_token": ""}' "$STATE_FILE"
+        "pid": 0, "proc_token": "", "ephemeral": (strenv(EPH)=="true")}' "$STATE_FILE"
     echo "$candidate"
 }
 
-# allocate_offset KEY [lease0/1] [holder] -> echoes the reserved offset.
+# allocate_offset KEY [lease0/1] [holder] [ephemeral0/1] -> echoes the offset.
 allocate_offset() { with_state_lock _allocate_offset_locked "$@"; }
 
 _free_task_locked() { state_init; K="$1" yq -i 'del(.tasks[strenv(K)])' "$STATE_FILE"; }
 # free_task KEY — drop a task's reservation (offset + lease + lock).
 free_task() { with_state_lock _free_task_locked "$@"; }
+
+# Force-tear-down a task with NO archive, NO pool, NO pre-flight: stop its docker
+# stack, remove each repo worktree, delete its task/<slug> branches, drop the
+# whole task dir, and free its ledger entry (offset + lease + lock). Used by
+# `sdev prune` (ephemeral reclaim) and `sdev destroy`. Idempotent: a key with no
+# workspace just has its ledger entry freed. The only shared-state write is the
+# locked free_task. $1 = ledger key ("<project>/<slug>" or legacy "<slug>").
+force_teardown_task() {   # $1=key
+    local key="$1" project slug dir
+    if [[ "$key" == */* ]]; then project="${key%/*}"; slug="${key##*/}"
+    else project="default"; slug="$key"; fi
+    dir="$SDEV_HOME/projects/$key"
+    if [[ -d "$dir" ]]; then
+        if [[ -x "$dir/compose" ]]; then
+            ( cd "$dir" && ./compose down -v --remove-orphans >/dev/null 2>&1 || true )
+        fi
+        local r rp src
+        while IFS= read -r r; do
+            [[ -n "$r" ]] || continue
+            rp="$(config_repo_path "$project" "$r" 2>/dev/null)"
+            [[ -n "$rp" && "$rp" != "null" ]] || continue
+            src="$(repo_source_dir "$project" "$rp")"
+            [[ -d "$dir/$rp" ]] || continue
+            git -C "$src" worktree remove --force "$dir/$rp" 2>/dev/null || true
+            git -C "$src" branch -D "task/$slug" 2>/dev/null || true
+        done < <(config_repos "$project" 2>/dev/null || true)
+        rm -rf "${dir:?}"
+    fi
+    free_task "$key"
+}
 
 # --- lease / process-lock -----------------------------------------------------
 _set_lease_locked() {   # $1=key  $2=holder
@@ -504,25 +537,37 @@ _clear_reservation_locked() {   # $1=key — drop lease + process-lock, keep off
 }
 clear_reservation() { with_state_lock _clear_reservation_locked "$@"; }
 
-# Short "leased:holder" / "lock:pid" / "lock:stale" annotation for `sdev ls`.
+# Short annotation for `sdev ls`: an "ephemeral" marker (when set) combined with
+# the reservation state — "leased:holder" / "lock:pid" / "lock:stale". Examples:
+# "ephemeral", "ephemeral lock:1234", "leased:nightowl", "lock:stale", "".
 task_status_label() {   # $1=key
     [[ -f "$STATE_FILE" ]] || { echo ""; return; }
-    local key="$1" lease holder pid tok
+    local key="$1" lease holder pid tok eph out=""
     [[ "$(K="$key" yq -r '.tasks | has(strenv(K))' "$STATE_FILE" 2>/dev/null)" == "true" ]] || { echo ""; return; }
+    eph="$(K="$key" yq -r '.tasks[strenv(K)].ephemeral // false' "$STATE_FILE")"
+    [[ "$eph" == "true" ]] && out="ephemeral"
     lease="$(K="$key" yq -r '.tasks[strenv(K)].lease // false' "$STATE_FILE")"
     if [[ "$lease" == "true" ]]; then
         holder="$(K="$key" yq -r '.tasks[strenv(K)].lease_holder // ""' "$STATE_FILE")"
-        if [[ -n "$holder" && "$holder" != "null" ]]; then echo "leased:$holder"; else echo "leased"; fi
-        return
+        if [[ -n "$holder" && "$holder" != "null" ]]; then out="${out:+$out }leased:$holder"; else out="${out:+$out }leased"; fi
+        echo "$out"; return
     fi
     pid="$(K="$key" yq -r '.tasks[strenv(K)].pid // 0' "$STATE_FILE")"
     tok="$(K="$key" yq -r '.tasks[strenv(K)].proc_token // ""' "$STATE_FILE")"
     if [[ -n "$pid" && "$pid" != "0" && "$pid" != "null" ]]; then
-        if _proc_alive "$pid" "$tok"; then echo "lock:$pid"; else echo "lock:stale"; fi
-        return
+        if _proc_alive "$pid" "$tok"; then out="${out:+$out }lock:$pid"; else out="${out:+$out }lock:stale"; fi
     fi
-    echo ""
+    echo "$out"
 }
+
+# True if a ledger task key is marked ephemeral.
+task_is_ephemeral() {   # $1=key
+    [[ -f "$STATE_FILE" ]] || return 1
+    [[ "$(K="$1" yq -r '.tasks[strenv(K)].ephemeral // false' "$STATE_FILE" 2>/dev/null)" == "true" ]]
+}
+
+# All ledger task keys.
+all_task_keys() { [[ -f "$STATE_FILE" ]] || return 0; yq -r '.tasks | keys | .[]' "$STATE_FILE" 2>/dev/null; }
 
 # All leased task keys (shown by `sdev ls` even when their workspace is gone).
 leased_task_keys() {
@@ -566,6 +611,26 @@ pool_drop() { with_state_lock _pool_drop_locked "$@"; }
 
 # All pool entry paths (for `sdev ls` / `sdev doctor`).
 pool_paths() { [[ -f "$STATE_FILE" ]] || return 0; yq -r '.pool[].path' "$STATE_FILE" 2>/dev/null; }
+
+# Tab-separated "project<TAB>repo<TAB>source<TAB>path" per pool entry (for
+# `sdev ls` and `sdev prune --pool`).
+pool_entries() {
+    [[ -f "$STATE_FILE" ]] || return 0
+    yq -r '.pool[] | (.project + "\t" + .repo + "\t" + .source + "\t" + .path)' "$STATE_FILE" 2>/dev/null
+}
+
+# Remove a pooled worktree from disk (via its source repo, else rm -rf) and drop
+# its ledger entry. Frees disk without touching any live task. Routes the ledger
+# mutation through the locked pool_drop.
+drain_pool_entry() {   # $1=source  $2=path
+    local src="$1" path="$2"
+    if [[ -n "$src" && "$src" != "null" && -d "$src/.git" ]] || [[ -f "$src/.git" ]]; then
+        git -C "$src" worktree remove --force "$path" 2>/dev/null || rm -rf "${path:?}" 2>/dev/null || true
+    else
+        rm -rf "${path:?}" 2>/dev/null || true
+    fi
+    pool_drop "$path"
+}
 
 # Clone (git URL) or symlink (existing local git repo) a repo source into
 # core/<project>/<name>. Expands a leading ~. Echoes "cloned" or "linked" on

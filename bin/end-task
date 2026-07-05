@@ -43,6 +43,14 @@ if [[ ! -d "$TASK_DIR" ]]; then
     fi
 fi
 
+# An ephemeral task is torn down fully — it never returns to the warm pool and
+# keeps no cached deps, regardless of --pool.
+TASK_KEY="${TASK_DIR#"$SDEV_HOME"/projects/}"
+if task_is_ephemeral "$TASK_KEY"; then
+    [[ $POOL -eq 1 ]] && log "task is ephemeral — ignoring --pool (torn down fully, no cached deps kept)"
+    POOL=0
+fi
+
 # Pre-flight (skip if --force)
 if [[ $FORCE -eq 0 ]]; then
     for repo in "$TASK_DIR"/*/; do
@@ -121,8 +129,7 @@ for p in "${TASK_REPOS[@]}"; do
     fi
 done
 
-# Free the task's port offset (and any lease/lock) from the central ledger.
-TASK_KEY="${TASK_DIR#"$SDEV_HOME"/projects/}"
+# Free the task's port offset (and any lease/lock/ephemeral entry) from the ledger.
 free_task "$TASK_KEY" || log "warning: could not update state ledger for $TASK_KEY"
 
 # Soft archive

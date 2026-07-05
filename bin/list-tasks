@@ -59,6 +59,19 @@ while IFS= read -r key; do
 done < <(leased_task_keys)
 
 echo
+echo "=== Warm pool ==="
+pool_found=0
+# shellcheck disable=SC2034  # psrc is part of the record layout, unused here
+while IFS=$'\t' read -r pproj prepo psrc ppath; do
+    [[ -n "$ppath" ]] || continue
+    [[ -n "$SCOPE_PROJECT" && "$pproj" != "$SCOPE_PROJECT" ]] && continue
+    pool_found=1
+    pstatus="ok"; [[ -d "$ppath" ]] || pstatus="MISSING"
+    printf "  %-28s %s [%s]\n" "$pproj/$prepo" "$ppath" "$pstatus"
+done < <(pool_entries)
+[[ $pool_found -eq 0 ]] && echo "  (none)"
+
+echo
 echo "=== Archived tasks ==="
 found=0
 print_archived() {
