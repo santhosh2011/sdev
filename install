@@ -179,14 +179,14 @@ if [[ "$SRC_DIR" == "$INSTALL_DIR" ]]; then
     say "✓ tool already at $INSTALL_DIR (running from install dir; skipping copy)"
 else
     mkdir -p "$INSTALL_DIR"
-    for item in bin core README.md LICENSE VERSION confs install claude; do
+    for item in bin core README.md LICENSE VERSION confs install install.sh self-update claude; do
         [[ -e "$SRC_DIR/$item" ]] || continue
         rm -rf "${INSTALL_DIR:?}/$item"
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
     done
     chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
     chmod +x "$INSTALL_DIR/claude/hooks/"* 2>/dev/null || true
-    chmod +x "$INSTALL_DIR/install" 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/install" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/self-update" 2>/dev/null || true
     say "✓ tool installed to $INSTALL_DIR"
 fi
 
@@ -232,6 +232,11 @@ say "✓ user-data home ready at $HOME_DIR"
 mkdir -p "$BIN_DIR"
 ln -sf "$INSTALL_DIR/bin/sdev" "$BIN_DIR/sdev"
 say "✓ linked $BIN_DIR/sdev -> $INSTALL_DIR/bin/sdev"
+# Standalone self-update entrypoint (works even without the `sdev update` dispatch).
+if [[ -f "$INSTALL_DIR/self-update" ]]; then
+    ln -sf "$INSTALL_DIR/self-update" "$BIN_DIR/sdev-update"
+    say "✓ linked $BIN_DIR/sdev-update -> $INSTALL_DIR/self-update"
+fi
 if [[ $FROM_PROMPT -eq 1 ]]; then
     # We chose the project home for the user, so own the rc wiring too (SDEV_HOME + PATH).
     persist_rc "$(detect_rc)"
