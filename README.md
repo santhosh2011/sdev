@@ -19,7 +19,19 @@ A small CLI for running many **isolated, parallel docker-compose workspaces** �
 > prints the URL elsewhere. Repo base branches default to `main` — set
 > `master`/`develop` per repo in `sdev init`/`sdev edit`.
 
-## Install (from the zip)
+## Install
+
+**One-line install (macOS / Linux):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/santhosh2011/sdev/main/install.sh | bash
+```
+
+This downloads the latest published release, verifies its SHA-256, unpacks it, and hands off to the bundled installer (which places the tool, wires your shell, and preserves any existing data). Knobs (all optional): `SDEV_VERSION=v1.2.3` to pin a release, `SDEV_REPO=owner/repo` to install from a fork, `SDEV_HOME=/path` to set the project home non-interactively.
+
+**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS — it ships 3.2), [mikefarah `yq`](https://github.com/mikefarah/yq) v4 (**not** the Python `yq`), and git. docker + compose (Docker Desktop or OrbStack) is only needed to *run stacks* (`sdev up`) — the installer warns if it's missing but installs anyway, so you can add Docker later.
+
+### From the zip
 
 You'll receive a `sdev-<version>.zip`. Then:
 
@@ -38,8 +50,6 @@ shasum -a 256 -c sdev-<version>.zip.sha256
 When run interactively, `./install` **prompts for your project home** (where projects, configs, and repos live; default `~/.sdev`), validates the path, then persists `export SDEV_HOME` and `PATH` into your shell rc inside an idempotent `# >>> sdev >>>` block. Set `SDEV_HOME` in the environment beforehand to skip the prompt (CI / scripted installs) — in that case the installer leaves your rc untouched and just prints the `PATH` line if needed.
 
 `./install` is idempotent and never touches your data under `$SDEV_HOME`.
-
-**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS), [yq](https://github.com/mikefarah/yq) v4, and docker + compose (Docker Desktop or OrbStack).
 
 ### Where things live
 
@@ -204,7 +214,13 @@ outside a task dir.
 
 ## Upgrading
 
-Unzip the newer `sdev-<version>.zip` and re-run `./install`. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced.
+Update in place to the latest release:
+
+```bash
+sdev update        # or the standalone alias: sdev-update
+```
+
+This fetches the latest published release, verifies its SHA-256, and reinstalls the tool code. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced. Pin a specific release with `SDEV_VERSION=v1.2.3 sdev update`. (Equivalently, unzip a newer `sdev-<version>.zip` and re-run `./install`.)
 
 ### Coming from an older in-repo layout?
 

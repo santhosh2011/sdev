@@ -1,0 +1,49 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Open/maintain a release PR from conventional commits; on merge, tag + create
+  # the GitHub release. Version is tracked in .release-please-manifest.json and
+  # mirrored into VERSION via the extra-files updater.
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # When a release is cut, build the distributable zip and attach it (plus its
+  # SHA-256) to the release so `install.sh` / `sdev update` can fetch it.
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build distributable zip
+        id: build
+        run: |
+          zip="$(./dist build)"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          ls -l "$zip" "$zip.sha256"
+      - name: Attach assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          ZIP: ${{ steps.build.outputs.zip }}
+        run: |
+          gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber

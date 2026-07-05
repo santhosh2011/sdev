@@ -32,8 +32,9 @@ check_deps() {
     else echo "✓ bash ${BASH_VERSINFO[0]}"; fi
     if command -v yq >/dev/null 2>&1; then echo "✓ yq ($(yq --version 2>/dev/null))"; else
         echo "✗ yq not found. Install: brew install yq (or see https://github.com/mikefarah/yq)" >&2; ok=0; fi
+    # docker is a runtime dep (needed for 'sdev up'), not for scaffolding — warn, don't fail.
     if command -v docker >/dev/null 2>&1; then echo "✓ docker"; else
-        echo "✗ docker not found (needed for 'sdev up'). Install Docker/OrbStack." >&2; ok=0; fi
+        echo "⚠️  docker not found — install Docker/OrbStack before 'sdev up' (not required to scaffold)." >&2; fi
     if command -v git >/dev/null 2>&1; then echo "✓ git"; else
         echo "✗ git not found (required for project setup and tasks)." >&2; ok=0; fi
     [[ $ok -eq 1 ]]

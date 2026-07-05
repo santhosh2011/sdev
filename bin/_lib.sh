@@ -299,6 +299,7 @@ _now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # --- portable lock ------------------------------------------------------------
 _STATE_LOCK_HELD=""
 _STATE_LOCK_STALE_SECS=10   # only a pid-less lock older than this is force-broken
+_STATE_LOCK_BUSY_SECS=120   # give up waiting for a live-held lock after this (wall-clock)
 
 # mtime epoch of a path (GNU `stat -c`, else BSD/macOS `stat -f`), or "" .
 _mtime_epoch() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }
@@ -339,12 +340,23 @@ _state_lock_release() {
 # releases when the substitution ends.
 with_state_lock() {
     mkdir -p "$SDEV_STATE_DIR"
-    local tries=0
+    # Wait with a wall-clock deadline + ramped backoff. The backoff sheds CPU so
+    # the current holder finishes fast even under heavy contention — many waiters
+    # busy-polling on a tight interval would otherwise starve the holder's yq work
+    # and collapse throughput. The deadline is wall-clock (not a spin count) so it
+    # means the same thing no matter how slow each poll runs on a loaded box.
+    local start now tries=0
+    start="$(date +%s 2>/dev/null || echo 0)"
     while ! mkdir "$STATE_LOCK" 2>/dev/null; do
         _state_lock_break_if_stale
+        now="$(date +%s 2>/dev/null || echo 0)"
+        [[ "$start" -gt 0 && $((now - start)) -ge $_STATE_LOCK_BUSY_SECS ]] \
+            && die "state lock busy: $STATE_LOCK (remove it if no sdev is running)"
         tries=$((tries + 1))
-        [[ $tries -gt 600 ]] && die "state lock busy: $STATE_LOCK (remove it if no sdev is running)"
-        sleep 0.05
+        if   [[ $tries -lt 10 ]]; then sleep 0.01   # fast path: uncontended release
+        elif [[ $tries -lt 50 ]]; then sleep 0.05
+        else                           sleep 0.2    # heavy contention: back off, let the holder run
+        fi
     done
     _STATE_LOCK_HELD="$STATE_LOCK"
     trap '_state_lock_release' EXIT              # arm release BEFORE anything can fail

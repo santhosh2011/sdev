@@ -55,3 +55,27 @@ teardown() { rm -rf "$OUT"; }
   echo "$listing" | grep -qx 'sdev/claude/hooks/sdev-staging-guard'
   echo "$listing" | grep -qx 'sdev/claude/hooks/sdev-edit-reminder'
 }
+
+@test "dist ships the network installer + self-update engine (executable)" {
+  run bash "$REPO/dist" "$OUT"
+  [ "$status" -eq 0 ]
+  zipfile="$output"
+  listing="$(unzip -Z1 "$zipfile")"
+  echo "$listing" | grep -qx 'sdev/install.sh'
+  echo "$listing" | grep -qx 'sdev/self-update'
+  # Executable bit survives into the archive (checks the -A permission field).
+  unzip -Z "$zipfile" 'sdev/install.sh'  | grep -qE '^-.{2}x'
+  unzip -Z "$zipfile" 'sdev/self-update' | grep -qE '^-.{2}x'
+}
+
+@test "dist ships a clean bare VERSION (no release-please annotation)" {
+  run bash "$REPO/dist" "$OUT"
+  [ "$status" -eq 0 ]
+  zipfile="$output"
+  ver="$(unzip -p "$zipfile" sdev/VERSION)"
+  # Repo VERSION carries a '# x-release-please-version' comment; the shipped one must not.
+  [[ "$ver" != *"#"* ]]
+  [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  # And the zip is named for that bare version.
+  [[ "$(basename "$zipfile")" == "sdev-$ver.zip" ]]
+}
