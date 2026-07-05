@@ -33,6 +33,7 @@ Single source of truth for three things, all defined in `bin/_lib.sh`:
 - The EXIT trap is armed **before** the pid write so a `die()`/crash in the critical section still releases.
 - Stale-break rule: break only if the recorded pid is dead, or (no pid file) the lock dir is older than the grace period. Never break a lock with no pid file that is younger than the grace (it's mid-setup).
 - Safe inside `$(...)` — the subshell's EXIT trap releases when the substitution ends. `$$` is the parent's pid inside a subshell; that's fine, it's only used for stale detection.
+- The acquire loop uses **ramped backoff** (0.01s → 0.05s → 0.2s) under a **wall-clock deadline** (`_STATE_LOCK_BUSY_SECS`, 120s), NOT a fixed-interval spin count. Backoff is load-bearing: under heavy contention many waiters busy-polling on a tight interval starve the holder's `yq` and collapse throughput — the old fixed 0.05s poll + 600-try (~30s) ceiling made waiters time out and emit an **empty** offset (not a duplicate) on slow/2-core CI runners (`tests/state_lock.bats` "many concurrent offset allocations"). Keep the deadline wall-clock so it means the same regardless of per-poll speed.
 
 ### Warm worktree pool
 
