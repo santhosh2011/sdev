@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/santhosh2011/sdev/main/install.sh |
 
 This downloads the latest published release, verifies its SHA-256, unpacks it, and hands off to the bundled installer (which places the tool, wires your shell, and preserves any existing data). Knobs (all optional): `SDEV_VERSION=v1.2.3` to pin a release, `SDEV_REPO=owner/repo` to install from a fork, `SDEV_HOME=/path` to set the project home non-interactively.
 
-**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS — it ships 3.2), [mikefarah `yq`](https://github.com/mikefarah/yq) v4 (**not** the Python `yq`), and docker + compose (Docker Desktop or OrbStack).
+**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS — it ships 3.2), [mikefarah `yq`](https://github.com/mikefarah/yq) v4 (**not** the Python `yq`), and git. docker + compose (Docker Desktop or OrbStack) is only needed to *run stacks* (`sdev up`) — the installer warns if it's missing but installs anyway, so you can add Docker later.
 
 ### From the zip
 

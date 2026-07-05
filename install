@@ -155,9 +155,12 @@ else
     else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
     ok=0
 fi
+# docker is a RUNTIME dep (needed for 'sdev up'), not an install-time one — warn,
+# don't block. This keeps the installer usable on machines that add Docker later
+# (and lets CI run the suite on runners without Docker, e.g. GitHub macOS).
 if command -v docker >/dev/null 2>&1; then say "✓ docker"; else
-    warn "✗ docker not found (needed for 'sdev up'). Install Docker Desktop or OrbStack."
-    ok=0; fi
+    warn "⚠️  docker not found — install Docker Desktop or OrbStack before 'sdev up' (not required to install)."
+fi
 if command -v git >/dev/null 2>&1; then say "✓ git"; else
     warn "✗ git not found (required for project setup and tasks)."
     if [[ "$os" == Darwin ]]; then warn "   macOS: xcode-select --install (or brew install git)"
