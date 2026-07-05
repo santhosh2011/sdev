@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+# Diagnostics for sdev's environment + central state ledger. Read-only: it never
+# mutates the ledger. Exits non-zero if any FAIL is reported (WARNs are OK).
+
+FAILED=0
+pass() { printf '  \033[32mok\033[0m   %s\n' "$*"; }
+warn() { printf '  \033[33mwarn\033[0m %s\n' "$*"; }
+fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAILED=1; }
+
+echo "=== dependencies ==="
+# bash >= 4 (this script already runs under whatever bash resolved it).
+if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+    pass "bash ${BASH_VERSION%%(*} (>= 4)"
+else
+    fail "bash ${BASH_VERSION%%(*} is < 4 — brew install bash"
+fi
+
+if command -v yq >/dev/null 2>&1; then
+    yqv="$(yq --version 2>/dev/null || true)"
+    if printf '%s' "$yqv" | grep -q 'mikefarah'; then
+        if printf '%s' "$yqv" | grep -qE 'v?4\.'; then
+            pass "yq $yqv"
+        else
+            fail "yq is not v4 ($yqv) — sdev needs mikefarah yq v4"
+        fi
+    else
+        # Older mikefarah builds omit the URL; accept a v4.x version string.
+        if printf '%s' "$yqv" | grep -qE 'version v?4\.'; then
+            pass "yq $yqv"
+        else
+            fail "yq present but not recognizable as mikefarah v4 ($yqv)"
+        fi
+    fi
+else
+    fail "yq not found on PATH — brew install yq"
+fi
+
+echo
+echo "=== paths ==="
+if [[ -d "$SDEV_HOME" ]]; then
+    pass "SDEV_HOME=$SDEV_HOME"
+else
+    warn "SDEV_HOME=$SDEV_HOME does not exist yet (run 'sdev init')"
+fi
+if [[ -w "$SDEV_HOME" || ! -e "$SDEV_HOME" ]]; then
+    pass "SDEV_HOME writable"
+else
+    fail "SDEV_HOME not writable: $SDEV_HOME"
+fi
+
+echo
+echo "=== state ledger ==="
+if [[ ! -f "$STATE_FILE" ]]; then
+    warn "no ledger yet at $STATE_FILE (created on first 'sdev new')"
+else
+    if yq -e '.' "$STATE_FILE" >/dev/null 2>&1; then
+        pass "ledger parses: $STATE_FILE"
+    else
+        fail "ledger is not valid YAML: $STATE_FILE"
+    fi
+
+    # Stale lock?
+    if [[ -d "$STATE_LOCK" ]]; then
+        lpid="$(cat "$STATE_LOCK/pid" 2>/dev/null || true)"
+        if [[ -n "$lpid" ]] && kill -0 "$lpid" 2>/dev/null; then
+            warn "state lock currently held by live pid $lpid"
+        else
+            warn "stale state lock present (holder pid '${lpid:-?}' dead) — self-heals on next use, or: rm -rf '$STATE_LOCK'"
+        fi
+    else
+        pass "state lock free"
+    fi
+
+    # Ledger vs disk: every alive task .env offset should match the ledger, and
+    # every ledger task should be leased/locked or have a workspace on disk.
+    drift=0
+    while IFS= read -r env; do
+        [[ -n "$env" ]] || continue
+        off="$(grep -E '^PORT_OFFSET=' "$env" 2>/dev/null | head -1 | cut -d= -f2)"
+        [[ -n "$off" ]] || continue
+        key="$(_state_key_from_env "$env")"
+        loff="$(K="$key" yq -r '.tasks[strenv(K)].offset // ""' "$STATE_FILE" 2>/dev/null)"
+        if [[ -z "$loff" || "$loff" == "null" ]]; then
+            warn "task '$key' (offset $off on disk) is missing from the ledger — will be adopted on next allocation"
+            drift=1
+        elif [[ "$loff" != "$off" ]]; then
+            fail "offset drift for '$key': disk=$off ledger=$loff"
+            drift=1
+        fi
+    done < <(find "$SDEV_HOME/projects" -type f -name .env 2>/dev/null | grep -v "/_archive/" || true)
+    [[ $drift -eq 0 ]] && pass "ledger offsets match on-disk tasks"
+
+    # Duplicate offsets in the ledger (the bug this feature prevents).
+    dupes="$(yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null | sort | uniq -d)"
+    if [[ -n "$dupes" ]]; then
+        fail "duplicate offsets in ledger: $(echo "$dupes" | tr '\n' ' ')"
+    else
+        pass "no duplicate offsets in ledger"
+    fi
+
+    # Pool entries point at real worktree dirs.
+    poolbad=0
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        if [[ ! -d "$p" ]]; then
+            warn "pool entry missing on disk: $p (prune with 'sdev end' bookkeeping or edit the ledger)"
+            poolbad=1
+        fi
+    done < <(pool_paths)
+    [[ $poolbad -eq 0 ]] && pass "warm-pool entries present on disk"
+fi
+
+echo
+if [[ $FAILED -eq 0 ]]; then
+    echo "doctor: OK"
+    exit 0
+else
+    echo "doctor: problems found (see FAIL lines above)"
+    exit 1
+fi

@@ -10,19 +10,25 @@ PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 
 usage() {
     cat <<EOF
-Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>]
+Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>] [--pool]
 
 Tears down a task: stops docker, removes worktrees, deletes branches, archives knowledge.
+
+--pool returns each repo worktree to the warm pool instead of deleting it: the
+tree is reset clean (gitignored deps/build caches kept) and relocated under
+state/pool/, ready for the next 'sdev new' to re-brand. The task's port offset
+is freed either way.
 EOF
 }
 
-SLUG=""; FORCE=0; KEEP_BRANCH=0; MERGE_TARGET="origin/qa"
+SLUG=""; FORCE=0; KEEP_BRANCH=0; MERGE_TARGET="origin/qa"; POOL=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --force) FORCE=1; shift ;;
         --keep-branch) KEEP_BRANCH=1; shift ;;
         --merge-target) MERGE_TARGET="$2"; shift 2 ;;
+        --pool) POOL=1; shift ;;
         *) [[ -z "$SLUG" ]] && SLUG="$1" || die "unexpected arg: $1"; shift ;;
     esac
 done
@@ -64,11 +70,15 @@ if [[ -x "$TASK_DIR/compose" ]]; then
     ( cd "$TASK_DIR" && ./compose down -v --remove-orphans 2>/dev/null || true )
 fi
 
-# Collect repos with worktrees
+# Collect repos with worktrees (path -> repo name for pool metadata)
 declare -a TASK_REPOS=()
+declare -A REPO_NAME_BY_PATH=()
 while read -r r; do
     p="$(config_repo_path "$PROJECT" "$r")"
-    [[ -d "$TASK_DIR/$p" ]] && TASK_REPOS+=("$p")
+    if [[ -d "$TASK_DIR/$p" ]]; then
+        TASK_REPOS+=("$p")
+        REPO_NAME_BY_PATH[$p]="$r"
+    fi
 done < <(config_repos "$PROJECT")
 
 # Final SHAs
@@ -77,14 +87,43 @@ for p in "${TASK_REPOS[@]}"; do
     FINAL_SHAS[$p]="$(git -C "$TASK_DIR/$p" rev-parse HEAD 2>/dev/null || echo unknown)"
 done
 
-# Remove worktrees + branches
+# Return worktrees to the pool (--pool) or remove them; then delete branches.
+declare -a POOLED=()
 for p in "${TASK_REPOS[@]}"; do
     src="$(repo_source_dir "$PROJECT" "$p")"
-    git -C "$src" worktree remove --force "$TASK_DIR/$p" 2>/dev/null || true
+    wt="$TASK_DIR/$p"
+    returned=0
+    if [[ $POOL -eq 1 ]]; then
+        rname="${REPO_NAME_BY_PATH[$p]:-$p}"
+        dest="$(pool_reserve_slot "$PROJECT" "$p")"
+        mkdir -p "$(dirname "$dest")"
+        # Reset clean but KEEP gitignored deps/build caches (clean -fd, not -fdx);
+        # detach so the task branch can be freed; relocate into the pool.
+        if git -C "$wt" reset --hard >/dev/null 2>&1 \
+           && git -C "$wt" clean -fd >/dev/null 2>&1 \
+           && git -C "$wt" checkout --detach >/dev/null 2>&1 \
+           && git -C "$src" worktree move "$wt" "$dest" 2>/dev/null; then
+            pool_record "$PROJECT" "$rname" "$p" "$src" "$dest"
+            returned=1
+            POOLED+=("$p")
+            log "returned $p to pool: $dest"
+        else
+            log "warning: could not pool $p — removing instead"
+            rm -rf "$dest" 2>/dev/null || true
+            pool_drop "$dest" 2>/dev/null || true
+        fi
+    fi
+    if [[ $returned -eq 0 ]]; then
+        git -C "$src" worktree remove --force "$wt" 2>/dev/null || true
+    fi
     if [[ $KEEP_BRANCH -eq 0 ]]; then
         git -C "$src" branch -D "task/$SLUG" 2>/dev/null || true
     fi
 done
+
+# Free the task's port offset (and any lease/lock) from the central ledger.
+TASK_KEY="${TASK_DIR#"$SDEV_HOME"/projects/}"
+free_task "$TASK_KEY" || log "warning: could not update state ledger for $TASK_KEY"
 
 # Soft archive
 ARCHIVE="$SDEV_HOME/projects/_archive/$PROJECT/$SLUG"
@@ -100,6 +139,7 @@ offset="$(grep '^PORT_OFFSET=' "$ARCHIVE/.env" 2>/dev/null | cut -d= -f2 || echo
     echo "- archive_date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- merge_target: $MERGE_TARGET"
     echo "- port_offset_freed: $offset"
+    [[ ${#POOLED[@]} -gt 0 ]] && echo "- pooled_worktrees: ${POOLED[*]}"
     echo ""
     echo "## Final commits"
     for p in "${TASK_REPOS[@]}"; do
