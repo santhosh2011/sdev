@@ -11,7 +11,7 @@ PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 usage() {
     cat <<EOF
 Usage: new-task <slug> [--env local|dev|staging] [--repos api,ui] [--api-base qa] [--ui-base qa]
-                       [--no-fetch] [--no-pool] [--lease [holder]]
+                       [--no-fetch] [--no-pool] [--lease [holder]] [--ephemeral]
 
 Creates an isolated parallel-task workspace under projects/<project>/<slug>/.
 Each repo's task branch starts from the latest origin/<base> (fetched first);
@@ -21,6 +21,10 @@ Warm pool: if a matching worktree was returned by 'sdev end --pool', it is
 reused (deps/build caches intact) and re-branded to task/<slug>; pass --no-pool
 to always create fresh. --lease reserves the task durably (a background agent
 holding it across sessions is never auto-reclaimed).
+
+--ephemeral marks a durable-lease-free, short-lived slot eligible for automatic
+reclamation by 'sdev prune'. It is torn down fully on end (worktree removed,
+offset freed) and never returns to the warm pool. Mutually exclusive with --lease.
 EOF
 }
 
@@ -31,6 +35,7 @@ FETCH=1
 USE_POOL=1
 LEASE=0
 LEASE_HOLDER=""
+EPHEMERAL=0
 declare -A BASE_OVERRIDE=()
 
 while [[ $# -gt 0 ]]; do
@@ -45,6 +50,7 @@ while [[ $# -gt 0 ]]; do
             # optional holder label (anything not starting with '-')
             if [[ $# -gt 0 && "$1" != -* ]]; then LEASE_HOLDER="$1"; shift; fi
             ;;
+        --ephemeral) EPHEMERAL=1; shift ;;
         --*-base)
             key="${1#--}"; key="${key%-base}"
             BASE_OVERRIDE[$key]="$2"
@@ -55,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -z "$LEASE_HOLDER" ]] && LEASE_HOLDER="${SDEV_LEASE_HOLDER:-}"
+[[ $LEASE -eq 1 && $EPHEMERAL -eq 1 ]] && die "--lease and --ephemeral are mutually exclusive (a lease is durable; ephemeral is auto-reclaimable)"
 
 [[ -n "$SLUG" ]] || { usage; die "slug required"; }
 validate_slug "$SLUG" || die "invalid slug '$SLUG' — must be kebab-case, 1-50 chars"
@@ -161,11 +168,12 @@ log "worktrees created: ${CREATED[*]}"
 # Reserve a port offset from the central ledger under the state lock. The task
 # dir already exists (created above) so a concurrent `sdev new` reconciling the
 # ledger keeps this reservation — this is what closes the old scan race.
-OFFSET="$(allocate_offset "$PROJECT/$SLUG" "$LEASE" "$LEASE_HOLDER")" \
+OFFSET="$(allocate_offset "$PROJECT/$SLUG" "$LEASE" "$LEASE_HOLDER" "$EPHEMERAL")" \
     || die "could not allocate a port offset (state lock or ledger error)"
 [[ -n "$OFFSET" ]] || die "port offset allocation returned empty"
 log "port offset=$OFFSET"
 [[ $LEASE -eq 1 ]] && log "leased${LEASE_HOLDER:+ to $LEASE_HOLDER}"
+[[ $EPHEMERAL -eq 1 ]] && log "ephemeral (auto-reclaimable by 'sdev prune'; never pooled)"
 
 env_file="$TASK_DIR/.env"
 {

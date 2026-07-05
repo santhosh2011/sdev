@@ -21,7 +21,7 @@ A bash CLI that runs many isolated, parallel docker-compose workspaces grouped b
 
 Single source of truth for three things, all defined in `bin/_lib.sh`:
 
-- **`tasks`**: `"<project>/<slug>" -> {offset, created_at, lease, lease_holder, pid, proc_token}`. Port offsets are RESERVED here **under the lock** by `allocate_offset` — this closes the old `compute_next_offset` scan race (two concurrent `sdev new` both scanned a free offset before either wrote its `.env`). `used = ledger offsets ∪ a fresh .env scan` (belt-and-suspenders). First use seeds the ledger from existing task `.env` `PORT_OFFSET`s (`state_seed_from_env`, idempotent via `.seeded`).
+- **`tasks`**: `"<project>/<slug>" -> {offset, created_at, lease, lease_holder, pid, proc_token, ephemeral}`. Port offsets are RESERVED here **under the lock** by `allocate_offset` — this closes the old `compute_next_offset` scan race (two concurrent `sdev new` both scanned a free offset before either wrote its `.env`). `used = ledger offsets ∪ a fresh .env scan` (belt-and-suspenders). First use seeds the ledger from existing task `.env` `PORT_OFFSET`s (`state_seed_from_env`, idempotent via `.seeded`). All entry-creation sites write every field including `ephemeral`; readers use `// false` so pre-`ephemeral` ledgers stay valid.
 - **`pool`** + **`pool_seq`**: the warm worktree pool (see below).
 - Reservation model: an offset is reclaimable only when its workspace is gone **and** it is not leased **and** it has no live process-lock (`state_reconcile`, run at every allocation — this is the self-heal).
 
@@ -38,11 +38,19 @@ Single source of truth for three things, all defined in `bin/_lib.sh`:
 
 `sdev end --pool` returns each repo worktree instead of deleting it: `git reset --hard` + `git clean -fd` (**NOT** `-fdx` — that keeps gitignored deps/build caches like `node_modules`, `build/`, `.venv`), then `git checkout --detach`, then `git worktree move` into `state/pool/<project>/<repo>.<seq>`. `sdev new` calls `pool_take <source>` and, on a hit, `git worktree move` back + `git checkout --no-track -B task/<slug> <start_point>` to re-brand (tracked files reset, ignored caches preserved). Any hiccup falls back to a fresh `git worktree add`. `--no-pool` forces fresh. The offset is freed on `end` either way (`free_task`).
 
-### Leases & process-locks
+### Leases, process-locks & ephemeral
 
 - Lease: durable reservation, no live process (`sdev lease`/`release`, or `sdev new --lease`). Never auto-reclaimed. Shown in `sdev ls`, including leases whose workspace is gone.
 - Process-lock: `sdev hold` records pid + `proc_token` (start-time). `_proc_alive` treats a reused pid (mismatched start-time) as dead → self-heals.
+- Ephemeral (`sdev new --ephemeral`, `ephemeral: true`): a durable-lease-free, short-lived slot eligible for automatic reclamation. Mutually exclusive with `--lease` (enforced in `new-task`). On `end` it is torn down fully and `POOL` is forced to 0 (`task_is_ephemeral` check) — it never returns to the warm pool.
 - `end` is an explicit teardown and frees everything (lease/lock included); leases only protect against *automatic* reclaim, not `end`.
+
+### Reclamation — `sdev prune` & `sdev destroy`
+
+- `force_teardown_task KEY` (in `_lib.sh`) is the shared force-teardown: docker down, `git worktree remove --force` per repo, `branch -D task/<slug>`, `rm -rf` the dir, then locked `free_task`. No archive, no pre-flight. It derives `project`/`slug` from the key (legacy flat keys → project `default`). The **only** shared-state write is the locked `free_task`.
+- `bin/prune` (dispatched by `sdev prune`) classifies ledger tasks: live lease / live lock → **protected**; ephemeral (and not live-locked) → **full teardown**; workspace-gone + not-leased + dead/no-lock → **drop entry** (self-heal). Also drops stale pool entries, and with `--pool` **drains** the pool via `drain_pool_entry` (`git worktree remove` through each entry's recorded `source`, else `rm -rf`, then locked `pool_drop`). **Dry-run by default**; `--apply`/`-y` performs it. `--pool-only` skips task reclaim; `--project` scopes.
+- `sdev destroy <slug>` (inline in `bin/sdev`) resolves a key from an on-disk workspace or a bare ledger entry (so a workspace-less lease is destroyable), refuses a live lease/lock without `--force`, then calls `force_teardown_task`.
+- Prune/destroy never reclaim a live-leased or live-locked task (an ephemeral task you `sdev hold` is protected too). Tests: `tests/ephemeral.bats`.
 
 ## Testing
 

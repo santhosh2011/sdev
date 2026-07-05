@@ -53,8 +53,11 @@ Pin a project first (`sdev use <project>`) or pass `-p <project>` per command.
 | `sdev open <slug>` | open the task's nginx URL |
 | `sdev code / cd <slug>` | open task dir in editor / print its path |
 | `sdev down / nuke <slug>` | stop (keep volumes) / stop + reclaim volumes |
-| `sdev ls` | list all tasks across projects (shows lease/lock state) |
+| `sdev ls` | list all tasks across projects (shows ephemeral/lease/lock state + warm pool) |
 | `sdev end <slug> [--pool]` | tear down + archive (or return worktree to the warm pool) |
+| `sdev new <slug> --ephemeral` | create a short-lived, auto-reclaimable task (never pooled) |
+| `sdev destroy <slug> [--force]` | force-remove a task (worktree + offset + entry; no archive) |
+| `sdev prune [--apply] [--pool]` | reclaim ephemeral/abandoned slots; `--pool` drains the warm pool |
 | `sdev lease <slug> [holder]` | durably reserve a task (survives with no process) |
 | `sdev release <slug>` | drop a task's lease + process-lock |
 | `sdev doctor` | check deps + state-ledger integrity |
@@ -79,6 +82,12 @@ concurrently.
 - `sdev lease <slug>` durably reserves a task so a background agent holding it
   across sessions is never auto-reclaimed; `sdev release` drops it. A dead
   process-lock self-heals. `sdev ls` shows `[leased:…]` / `[lock:…]` state.
+- `sdev new <slug> --ephemeral` is the opposite of a lease: a short-lived,
+  auto-reclaimable slot that is torn down fully on `end` (never pooled) and swept
+  by `sdev prune`. `sdev prune` is a dry-run preview by default (`--apply` to
+  perform) — it reclaims ephemeral + abandoned slots and, with `--pool`, drains
+  the warm pool to free disk. It never touches a live-leased or live-locked task.
+  `sdev destroy <slug>` force-removes one specific task (`--force` past a lease/lock).
 
 ## Gotchas
 

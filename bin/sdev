@@ -41,9 +41,12 @@ Commands:
   down <slug>                     stop the stack (docker-compose down)
   nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
   end <slug> [--pool] [flags…]    tear down + archive (or return worktree to pool)
+  destroy <slug> [--force]        force-remove a task (worktree + offset + entry; no archive)
+  prune [--apply] [--pool]        reclaim ephemeral/abandoned slots; --pool drains the warm pool
   lease <slug> [holder]           durably reserve a task (survives with no process)
   release <slug>                  drop a task's lease + process-lock
   hold <slug> [--pid N]           attach a self-healing process-lock (default: this shell)
+  new <slug> --ephemeral          create a short-lived, auto-reclaimable task
   doctor                          check deps + state-ledger integrity
   ls | list                       list alive / archived / orphan tasks
   ps <slug>                       compose ps for a task
@@ -62,7 +65,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|up|down|nuke|end|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|init|edit|migrate|help|-h|--help) return 0 ;;
+        new|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|init|edit|migrate|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -105,6 +108,38 @@ case "$CMD" in
         ;;
     end)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
+        ;;
+    destroy)
+        # Force-remove a specific task: worktree + branch + docker + offset +
+        # ledger entry. No archive, no pool, no pre-flight. Refuses a task with a
+        # live lease or live process-lock unless --force. Also handles a
+        # workspace-less entry (e.g. a lease whose worktree is already gone).
+        slug=""; force=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --force|-f) force=1; shift ;;
+                *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
+            esac
+        done
+        [[ -n "$slug" ]] || die "slug required"
+        # Resolve the ledger key: prefer an on-disk workspace, else a bare entry.
+        if [[ -d "$SDEV_HOME/projects/$PROJECT/$slug" ]]; then key="$PROJECT/$slug"
+        elif [[ -d "$SDEV_HOME/projects/$slug" ]]; then key="$slug"
+        elif [[ -f "$STATE_FILE" && "$(K="$PROJECT/$slug" yq -r '.tasks | has(strenv(K))' "$STATE_FILE" 2>/dev/null)" == "true" ]]; then key="$PROJECT/$slug"
+        elif [[ -f "$STATE_FILE" && "$(K="$slug" yq -r '.tasks | has(strenv(K))' "$STATE_FILE" 2>/dev/null)" == "true" ]]; then key="$slug"
+        else die "task '$slug' not found (no workspace or ledger entry in project '$PROJECT')"; fi
+        if [[ $force -eq 0 ]]; then
+            st="$(_task_reservation_state "$key")"
+            case "$st" in
+                leased) die "$key holds a live lease — 'sdev release $slug' first, or pass --force" ;;
+                locked) die "$key holds a live process-lock — pass --force to destroy anyway" ;;
+            esac
+        fi
+        force_teardown_task "$key"
+        log "destroyed $key (worktree + offset + ledger entry removed)"
+        ;;
+    prune)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
         ;;
     lease)
         slug="${1:-}"; shift || true

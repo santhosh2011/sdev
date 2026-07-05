@@ -100,6 +100,9 @@ for `sdev up` to run your actual app.
 | `sdev down / nuke <slug>` | stop (keep volumes) / stop + reclaim volumes |
 | `sdev ls` | list all tasks across projects (the work-list dashboard) |
 | `sdev end <slug> [--pool]` | tear down + archive (or return the worktree to the warm pool) |
+| `sdev new <slug> --ephemeral` | create a short-lived, auto-reclaimable task (never pooled) |
+| `sdev destroy <slug> [--force]` | force-remove a task: worktree + offset + entry, no archive |
+| `sdev prune [--apply] [--pool]` | reclaim ephemeral/abandoned slots; `--pool` drains the warm pool |
 | `sdev lease <slug> [holder]` | durably reserve a task (survives with no live process) |
 | `sdev release <slug>` | drop a task's lease + process-lock |
 | `sdev hold <slug>` | attach a self-healing process-lock (this shell) |
@@ -136,7 +139,29 @@ sdev new next-feature         # reuses it: deps/caches intact, rebranded to task
 - **Lease** — a *durable* reservation with no live process, for a background agent keeping a task across sessions or reboots. `sdev lease <slug> [holder]` sets it; a leased task is never auto-reclaimed until `sdev release <slug>`. Leases (even with no workspace) show under `sdev ls`.
 - **Process-lock** — `sdev hold <slug>` pins a task to a live process (pid + start-time). It **self-heals**: once that process is gone (or its pid is reused, caught via the start-time), the lock reads as stale and the offset becomes reclaimable again.
 
-`sdev ls` annotates each task with its state — `[leased:holder]`, `[lock:pid]`, or `[lock:stale]`. Run `sdev doctor` to check dependencies and ledger integrity (offset drift, duplicates, stale locks, orphaned pool entries).
+`sdev ls` annotates each task with its state — `[ephemeral]`, `[leased:holder]`, `[lock:pid]`, or `[lock:stale]` (markers combine, e.g. `[ephemeral lock:1234]`) — and lists the warm pool. Run `sdev doctor` to check dependencies and ledger integrity (offset drift, duplicates, stale locks, orphaned pool entries).
+
+## Ephemeral tasks & pruning
+
+**Ephemeral tasks.** `sdev new <slug> --ephemeral` creates a *durable-lease-free, short-lived* slot that is **eligible for automatic reclamation**. It is the opposite of a leased task: it can never be leased (the two flags are mutually exclusive), it is **torn down fully on `sdev end`** — the worktree is removed and the offset freed, and it is **never returned to the warm pool** (no cached deps kept), and `sdev prune` will sweep it. Use it for throwaway checks and short agent runs you don't want to remember to clean up.
+
+**`sdev prune`** is the safe, automatic-eligible sweep. By default it is a **dry-run** that previews what it would reclaim; pass `--apply` (or `-y`) to perform it:
+
+- **ephemeral tasks** — reclaimed fully (worktree + offset + ledger entry).
+- **abandoned ledger entries** — an offset reserved for a task whose workspace is gone and that is neither leased nor live-locked; the entry is dropped and the offset freed (the self-heal, no data to lose).
+- **stale warm-pool entries** — pool records whose worktree vanished on disk.
+
+`sdev prune --pool` *additionally* **drains the warm pool**: it removes every cached worktree to free disk (draining touches only pooled worktrees, never a live task). `--pool-only` drains the pool and leaves task reservations alone. `--project <name>` scopes the sweep. Prune **never** reclaims a task holding a live lease or a live process-lock — including an ephemeral one you have `sdev hold`-ed.
+
+**`sdev destroy <slug>`** is the targeted nuke for a single task: it force-removes the worktree, deletes the `task/<slug>` branches, stops the stack, and frees the offset + ledger entry — **no archive, no pre-flight**. It refuses a task with a live lease or live process-lock unless you pass `--force`.
+
+```bash
+sdev new probe --ephemeral   # throwaway slot; auto-reclaimable, never pooled
+sdev prune                   # preview: what would be reclaimed?
+sdev prune --apply           # reclaim ephemeral + abandoned slots + stale pool entries
+sdev prune --pool --apply    # …and drain the warm pool to reclaim disk
+sdev destroy wedged-task -f  # force-remove one specific task, lease/lock and all
+```
 
 ## Claude Code integration
 
