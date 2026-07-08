@@ -177,3 +177,34 @@ JSON
   [ "$status" -eq 0 ]
   [ ! -e "$FAKEHOME/.claude/settings.json" ]
 }
+
+# docker is a RUNTIME dependency (needed for 'sdev up'), not an install-time one.
+# The installer must succeed — with a warning — when docker is absent, so the
+# curl installer works on a fresh machine and CI can run on Docker-less runners
+# (GitHub's macOS runners have no Docker). git/bash/yq stay hard requirements.
+@test "install treats docker as runtime-only: succeeds (warns) when docker is absent" {
+  # Mirror the whole PATH into a stub dir, then drop docker → a hermetic,
+  # Docker-less environment regardless of what the test host has installed.
+  # First occurrence wins (plain `ln -s`, no -f) so PATH precedence is preserved
+  # — e.g. Homebrew's bash 5 shadows /bin/bash 3.2, exactly as a real shell resolves.
+  local stub d f name
+  stub="$(mktemp -d)/nodocker"; mkdir -p "$stub"
+  IFS=: read -ra _dirs <<< "$PATH"
+  for d in "${_dirs[@]}"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -x "$f" ] || continue
+      name="$(basename "$f")"
+      [ -e "$stub/$name" ] || ln -s "$f" "$stub/$name" 2>/dev/null || true
+    done
+  done
+  rm -f "$stub/docker"
+  [ ! -e "$stub/docker" ]
+  run env -i HOME="$FAKEHOME" SHELL=/bin/zsh PATH="$stub" \
+      SDEV_INSTALL="$INST" SDEV_HOME="$HOMEDIR" SDEV_BIN_DIR="$BINDIR" \
+      "$stub/bash" "$REPO/install"
+  [ "$status" -eq 0 ]
+  [ -x "$INST/bin/sdev" ]
+  [[ "$output" == *"docker not found"* ]]
+  rm -rf "$(dirname "$stub")"
+}

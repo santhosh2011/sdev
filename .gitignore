@@ -1,5 +1,7 @@
 # Users' live task workspaces and secrets are never committed.
 /projects/
+# Central allocation ledger + warm worktree pool (runtime state under $SDEV_HOME).
+/state/
 # GSD/agent session artifacts (not part of the package).
 /.planning/
 # Brainstorm/plan docs from the superpowers workflow (kept locally, not tracked).

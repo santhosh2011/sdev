@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+# `sdev prune` — safe, automatic-eligible reclamation of the state ledger.
+#
+# Reclaims (frees offsets + tears down / drops entries):
+#   * ephemeral tasks           — short-lived slots, torn down fully.
+#   * abandoned ledger entries  — workspace gone AND not leased AND no live
+#                                 process-lock (the self-heal; frees leaked offsets).
+#   * stale warm-pool entries   — pool paths whose worktree vanished on disk.
+# NEVER reclaims a task holding a live lease or a live process-lock.
+#
+# --pool additionally DRAINS the warm pool: removes every cached worktree to free
+# disk. Draining touches only pooled worktrees, never a live task.
+#
+# Dry-run by default: prints what it WOULD do and exits. Pass --apply (or -y) to
+# perform the reclamation.
+
+usage() {
+    cat <<EOF
+Usage: sdev prune [--apply|-y] [--pool] [--pool-only] [--project <name>]
+
+Reclaims ephemeral tasks, abandoned ledger entries (leaked offsets), and stale
+warm-pool entries. A live-leased or live-locked task is never touched.
+
+  --apply, -y     actually perform the reclamation (default: dry-run preview)
+  --pool          also drain the warm pool (remove cached worktrees, free disk)
+  --pool-only     only drain the warm pool; leave task reservations alone
+  --project NAME  restrict to one project's tasks / pool entries
+  -h, --help      show this help
+EOF
+}
+
+APPLY=0
+DRAIN_POOL=0
+POOL_ONLY=0
+SCOPE_PROJECT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --apply|-y|--yes) APPLY=1; shift ;;
+        --pool) DRAIN_POOL=1; shift ;;
+        --pool-only) DRAIN_POOL=1; POOL_ONLY=1; shift ;;
+        --project) SCOPE_PROJECT="${2:-}"; shift 2 ;;
+        *) die "unknown flag: $1" ;;
+    esac
+done
+
+# key belongs to the scope? "" scope matches everything.
+in_scope() {   # $1=key
+    [[ -z "$SCOPE_PROJECT" ]] && return 0
+    local k="$1"
+    [[ "$k" == "$SCOPE_PROJECT/"* || "$k" == "$SCOPE_PROJECT" ]]
+}
+
+state_init
+
+# ---- classify tasks ----------------------------------------------------------
+declare -a RECLAIM_EPH=()      # ephemeral, no live protection -> full teardown
+declare -a RECLAIM_LEDGER=()   # abandoned entry (no workspace) -> drop entry
+declare -a PROTECTED=()        # live lease / live lock -> left untouched (info)
+
+if [[ $POOL_ONLY -eq 0 ]]; then
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        in_scope "$key" || continue
+        st="$(_task_reservation_state "$key")"      # leased|locked|stale|free
+        case "$st" in
+            leased) PROTECTED+=("$key [leased]"); continue ;;
+            locked) PROTECTED+=("$key [live lock]"); continue ;;
+        esac
+        # Not leased; lock is dead (stale) or absent (free).
+        if task_is_ephemeral "$key"; then
+            RECLAIM_EPH+=("$key")
+        elif [[ ! -d "$SDEV_HOME/projects/$key" ]]; then
+            RECLAIM_LEDGER+=("$key")                 # leaked offset, nothing on disk
+        fi
+        # else: a normal task with a live workspace and no live lock — a real
+        # task, left for an explicit `sdev end`/`sdev destroy`.
+    done < <(all_task_keys)
+fi
+
+# ---- classify pool entries ---------------------------------------------------
+declare -a POOL_STALE=()       # path missing on disk -> drop dangling entry
+declare -a POOL_DRAIN=()       # all entries in scope -> drained by --pool
+# shellcheck disable=SC2034  # prepo is part of the record layout, unused here
+while IFS=$'\t' read -r pproj prepo psrc ppath; do
+    [[ -n "$ppath" ]] || continue
+    [[ -n "$SCOPE_PROJECT" && "$pproj" != "$SCOPE_PROJECT" ]] && continue
+    if [[ ! -d "$ppath" ]]; then
+        POOL_STALE+=("$psrc"$'\t'"$ppath")
+    elif [[ $DRAIN_POOL -eq 1 ]]; then
+        POOL_DRAIN+=("$psrc"$'\t'"$ppath")
+    fi
+done < <(pool_entries)
+
+# ---- preview -----------------------------------------------------------------
+total=$(( ${#RECLAIM_EPH[@]} + ${#RECLAIM_LEDGER[@]} + ${#POOL_STALE[@]} + ${#POOL_DRAIN[@]} ))
+
+echo "=== prune preview ==="
+if [[ ${#RECLAIM_EPH[@]} -gt 0 ]]; then
+    echo "ephemeral tasks to reclaim (worktree + offset + entry):"
+    for k in "${RECLAIM_EPH[@]}"; do echo "  - $k"; done
+fi
+if [[ ${#RECLAIM_LEDGER[@]} -gt 0 ]]; then
+    echo "abandoned ledger entries to drop (free leaked offset):"
+    for k in "${RECLAIM_LEDGER[@]}"; do echo "  - $k"; done
+fi
+if [[ ${#POOL_STALE[@]} -gt 0 ]]; then
+    echo "stale pool entries to drop (worktree already gone):"
+    for e in "${POOL_STALE[@]}"; do echo "  - ${e#*$'\t'}"; done
+fi
+if [[ ${#POOL_DRAIN[@]} -gt 0 ]]; then
+    echo "warm-pool worktrees to drain (free disk):"
+    for e in "${POOL_DRAIN[@]}"; do echo "  - ${e#*$'\t'}"; done
+fi
+if [[ ${#PROTECTED[@]} -gt 0 ]]; then
+    echo "protected (left untouched):"
+    for k in "${PROTECTED[@]}"; do echo "  - $k"; done
+fi
+[[ $total -eq 0 ]] && echo "  nothing to reclaim"
+
+if [[ $APPLY -eq 0 ]]; then
+    echo
+    echo "(dry-run — nothing changed; pass --apply to perform)"
+    exit 0
+fi
+
+# ---- apply -------------------------------------------------------------------
+echo
+echo "=== prune apply ==="
+for k in "${RECLAIM_EPH[@]}"; do
+    force_teardown_task "$k"
+    log "reclaimed ephemeral $k (worktree + offset freed)"
+done
+for k in "${RECLAIM_LEDGER[@]}"; do
+    free_task "$k"
+    log "dropped abandoned ledger entry $k (offset freed)"
+done
+for e in "${POOL_STALE[@]}"; do
+    src="${e%%$'\t'*}"; path="${e#*$'\t'}"
+    drain_pool_entry "$src" "$path"
+    log "dropped stale pool entry $path"
+done
+for e in "${POOL_DRAIN[@]}"; do
+    src="${e%%$'\t'*}"; path="${e#*$'\t'}"
+    drain_pool_entry "$src" "$path"
+    log "drained pooled worktree $path"
+done
+echo "prune: done"

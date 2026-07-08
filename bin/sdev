@@ -40,10 +40,17 @@ Commands:
   up <slug> [extra…]              start the stack (docker-compose up -d)
   down <slug>                     stop the stack (docker-compose down)
   nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
-  end <slug> [flags…]             tear down + archive the task
+  end <slug> [--pool] [flags…]    tear down + archive (or return worktree to pool)
+  destroy <slug> [--force]        force-remove a task (worktree + offset + entry; no archive)
+  prune [--apply] [--pool]        reclaim ephemeral/abandoned slots; --pool drains the warm pool
+  lease <slug> [holder]           durably reserve a task (survives with no process)
+  release <slug>                  drop a task's lease + process-lock
+  hold <slug> [--pid N]           attach a self-healing process-lock (default: this shell)
+  new <slug> --ephemeral          create a short-lived, auto-reclaimable task
+  doctor                          check deps + state-ledger integrity
   ls | list [--json]              list alive / archived / orphan tasks
   status [--json]                 fleet overview across all projects
-  ps <slug>                       compose ps for a task
+  ps <slug> [--json]              compose ps for a task
   logs <slug> [service…]          tail logs (-f); pass --no-follow to disable
   shell <slug> [service]          exec sh in service (default: project's shell service)
   open <slug>                     open http://localhost:<nginx-port>/ in browser
@@ -52,7 +59,7 @@ Commands:
   init                            interactive wizard to configure your first project
   edit [<project>] [--delete-source]   add/remove repos, edit conf/shell/stack
   migrate --from <dir>            move an old in-repo sdev layout into \$SDEV_HOME
-  doctor [--json]                 check environment (bash/yq/jq/docker/\$SDEV_HOME)
+  update                          fetch the latest release and reinstall in place
   help | -h | --help              show this help
 EOF
 }
@@ -60,10 +67,14 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|up|down|nuke|end|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|doctor|help|-h|--help) return 0 ;;
+        new|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|update|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
+
+# Ledger key for a resolved task dir: projects/-relative ("<project>/<slug>" or
+# legacy "<slug>"). Matches how new-task/end-task key the ledger.
+task_key_for_dir() { echo "${1#"$SDEV_HOME"/projects/}"; }
 
 require_task_dir() {
     local slug="$1"
@@ -100,6 +111,73 @@ case "$CMD" in
     end)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
         ;;
+    destroy)
+        # Force-remove a specific task: worktree + branch + docker + offset +
+        # ledger entry. No archive, no pool, no pre-flight. Refuses a task with a
+        # live lease or live process-lock unless --force. Also handles a
+        # workspace-less entry (e.g. a lease whose worktree is already gone).
+        slug=""; force=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --force|-f) force=1; shift ;;
+                *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
+            esac
+        done
+        [[ -n "$slug" ]] || die "slug required"
+        # Resolve the ledger key: prefer an on-disk workspace, else a bare entry.
+        if [[ -d "$SDEV_HOME/projects/$PROJECT/$slug" ]]; then key="$PROJECT/$slug"
+        elif [[ -d "$SDEV_HOME/projects/$slug" ]]; then key="$slug"
+        elif [[ -f "$STATE_FILE" && "$(K="$PROJECT/$slug" yq -r '.tasks | has(strenv(K))' "$STATE_FILE" 2>/dev/null)" == "true" ]]; then key="$PROJECT/$slug"
+        elif [[ -f "$STATE_FILE" && "$(K="$slug" yq -r '.tasks | has(strenv(K))' "$STATE_FILE" 2>/dev/null)" == "true" ]]; then key="$slug"
+        else die "task '$slug' not found (no workspace or ledger entry in project '$PROJECT')"; fi
+        if [[ $force -eq 0 ]]; then
+            st="$(_task_reservation_state "$key")"
+            case "$st" in
+                leased) die "$key holds a live lease — 'sdev release $slug' first, or pass --force" ;;
+                locked) die "$key holds a live process-lock — pass --force to destroy anyway" ;;
+            esac
+        fi
+        force_teardown_task "$key"
+        log "destroyed $key (worktree + offset + ledger entry removed)"
+        ;;
+    prune)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
+        ;;
+    lease)
+        slug="${1:-}"; shift || true
+        holder="${1:-${SDEV_LEASE_HOLDER:-}}"
+        dir="$(require_task_dir "$slug")"
+        key="$(task_key_for_dir "$dir")"
+        set_lease "$key" "$holder"
+        log "leased $key${holder:+ to $holder} (durable — not auto-reclaimed until 'sdev release')"
+        ;;
+    release)
+        slug="${1:-}"; shift || true
+        dir="$(require_task_dir "$slug")"
+        key="$(task_key_for_dir "$dir")"
+        clear_reservation "$key"
+        log "released $key (lease + process-lock cleared)"
+        ;;
+    hold)
+        slug=""; pid=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --pid) pid="$2"; shift 2 ;;
+                *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
+            esac
+        done
+        dir="$(require_task_dir "$slug")"
+        key="$(task_key_for_dir "$dir")"
+        # Default to the invoking shell ($PPID) — a long-lived owner whose death
+        # makes the lock self-heal. proc_token pins the identity against PID reuse.
+        [[ -z "$pid" ]] && pid="$PPID"
+        [[ "$pid" =~ ^[0-9]+$ ]] || die "invalid --pid '$pid'"
+        set_lock "$key" "$pid" "$(_proc_token "$pid")"
+        log "process-lock on $key held by pid $pid (self-heals when it exits)"
+        ;;
+    doctor)
+        exec "$SCRIPT_DIR/doctor"
+        ;;
     init)
         exec "$SCRIPT_DIR/init"
         ;;
@@ -109,8 +187,11 @@ case "$CMD" in
     migrate)
         exec "$SCRIPT_DIR/migrate" "$@"
         ;;
-    doctor)
-        exec "$SCRIPT_DIR/doctor" "$@"
+    update)
+        # self-update ships at the install-dir root (parent of bin/).
+        updater="$SCRIPT_DIR/../self-update"
+        [[ -x "$updater" ]] || die "self-update not found at $updater (reinstall sdev)"
+        exec "$updater" "$@"
         ;;
     ls|list)
         # shellcheck disable=SC2086

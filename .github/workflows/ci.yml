@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+      - name: Lint shell scripts
+        # -x follows sourced files (bin/sdev sources bin/_lib.sh).
+        # -S warning: fail on real problems, tolerate style/info notes.
+        run: |
+          shellcheck -x -S warning \
+            bin/sdev bin/_lib.sh bin/init bin/new-task bin/end-task \
+            bin/edit-project bin/list-tasks bin/migrate bin/doctor bin/prune \
+            install install.sh self-update dist bootstrap
+
+  test:
+    name: bats (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq
+          # mikefarah yq v4 (NOT the Python yq).
+          sudo curl -fsSL \
+            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
+            -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        # bash: macOS ships 3.2; the tool needs >= 4. bats-core + mikefarah yq.
+        run: brew install bats-core yq bash jq
+
+      - name: Show versions
+        run: |
+          echo "PATH=$PATH"
+          bash --version | head -1
+          echo "env bash -> $(command -v bash)"
+          yq --version
+          bats --version
+          git --version
+
+      - name: Verify yq is mikefarah v4
+        run: |
+          yq --version | grep -q mikefarah || { echo "wrong yq (need mikefarah)"; exit 1; }
+          yq --version | grep -Eq 'version v?4' || { echo "need yq v4"; exit 1; }
+
+      - name: Run bats suite
+        run: bats tests

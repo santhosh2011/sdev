@@ -2,7 +2,10 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo 0.0.0)"
+# VERSION carries a release-please annotation comment (# x-release-please-version);
+# strip it so builds get a clean bare semver.
+VERSION="$(sed -E 's/[[:space:]]*#.*$//' "$REPO_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+VERSION="${VERSION:-0.0.0}"
 OUT_DIR="${1:-$REPO_DIR/build}"
 
 STAGE="$(mktemp -d)"
@@ -13,9 +16,15 @@ mkdir -p "$PKG"
 # Tool code + top-level reference assets.
 cp -R "$REPO_DIR/bin" "$PKG/bin"
 cp "$REPO_DIR/install" "$PKG/install"
-for f in README.md LICENSE VERSION; do
+# Distribution helpers: the network installer + self-update engine.
+for s in install.sh self-update; do
+    [[ -f "$REPO_DIR/$s" ]] && { cp "$REPO_DIR/$s" "$PKG/$s"; chmod +x "$PKG/$s"; }
+done
+for f in README.md LICENSE; do
     [[ -f "$REPO_DIR/$f" ]] && cp "$REPO_DIR/$f" "$PKG/$f"
 done
+# Ship a clean, bare VERSION (no release-please annotation) to end users.
+printf '%s\n' "$VERSION" > "$PKG/VERSION"
 
 # core/: ship ONLY the default config + example registry — no personal projects, no clones.
 mkdir -p "$PKG/core/projects.d"

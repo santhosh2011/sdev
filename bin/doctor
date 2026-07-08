@@ -1,80 +1,133 @@
 #!/usr/bin/env bash
-# sdev doctor — check the environment sdev needs. Human output by default; --json for agents.
 set -euo pipefail
 
-# Resolve script dir, following symlinks (mirrors bin/sdev).
-SOURCE="${BASH_SOURCE[0]}"
-while [[ -L "$SOURCE" ]]; do
-    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
-    SOURCE="$(readlink "$SOURCE")"
-    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
-done
-SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
 
-json=0
-[[ "${1:-}" == "--json" ]] && json=1
+# Diagnostics for sdev's environment + central state ledger. Read-only: it never
+# mutates the ledger. Exits non-zero if any FAIL is reported (WARNs are OK).
 
-# Build the checks array with jq (never hand-rolled JSON).
-checks="[]"
-overall=true
-add_check() {   # $1=name $2=ok(true|false) $3=detail
-    [[ "$2" == "false" ]] && overall=false
-    checks="$(jq -c --arg n "$1" --argjson ok "$2" --arg d "$3" \
-        '. + [{name:$n, ok:$ok, detail:$d}]' <<<"$checks")"
-}
+FAILED=0
+pass() { printf '  \033[32mok\033[0m   %s\n' "$*"; }
+warn() { printf '  \033[33mwarn\033[0m %s\n' "$*"; }
+fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAILED=1; }
 
-# bash >= 4
-if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
-    add_check bash true "$BASH_VERSION"
+echo "=== dependencies ==="
+# bash >= 4 (this script already runs under whatever bash resolved it).
+if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+    pass "bash ${BASH_VERSION%%(*} (>= 4)"
 else
-    add_check bash false "$BASH_VERSION (need >= 4; brew install bash)"
+    fail "bash ${BASH_VERSION%%(*} is < 4 — brew install bash"
 fi
 
-# yq (mikefarah v4)
 if command -v yq >/dev/null 2>&1; then
-    add_check yq true "$(yq --version 2>&1 | head -1)"
+    yqv="$(yq --version 2>/dev/null || true)"
+    if printf '%s' "$yqv" | grep -q 'mikefarah'; then
+        if printf '%s' "$yqv" | grep -qE 'v?4\.'; then
+            pass "yq $yqv"
+        else
+            fail "yq is not v4 ($yqv) — sdev needs mikefarah yq v4"
+        fi
+    else
+        # Older mikefarah builds omit the URL; accept a v4.x version string.
+        if printf '%s' "$yqv" | grep -qE 'version v?4\.'; then
+            pass "yq $yqv"
+        else
+            fail "yq present but not recognizable as mikefarah v4 ($yqv)"
+        fi
+    fi
 else
-    add_check yq false "missing (brew install yq)"
+    fail "yq not found on PATH — brew install yq"
 fi
 
-# jq
 if command -v jq >/dev/null 2>&1; then
-    add_check jq true "$(jq --version 2>&1 | head -1)"
+    pass "jq $(jq --version 2>/dev/null)"
 else
-    add_check jq false "missing (brew install jq)"
+    warn "jq not found — needed for --json output (sdev status/ls/ps --json)"
 fi
 
-# docker: binary is required; engine reachability is reported, not fatal.
-if command -v docker >/dev/null 2>&1; then
-    if docker ps >/dev/null 2>&1; then
-        add_check docker true "engine reachable"
-    else
-        add_check docker true "binary present, engine not reachable"
-    fi
-else
-    add_check docker false "missing (install Docker Desktop or OrbStack)"
-fi
-
-# SDEV_HOME exists
+echo
+echo "=== paths ==="
 if [[ -d "$SDEV_HOME" ]]; then
-    add_check sdev_home true "$SDEV_HOME"
+    pass "SDEV_HOME=$SDEV_HOME"
 else
-    add_check sdev_home false "$SDEV_HOME (not found; run sdev init)"
+    warn "SDEV_HOME=$SDEV_HOME does not exist yet (run 'sdev init')"
+fi
+if [[ -w "$SDEV_HOME" || ! -e "$SDEV_HOME" ]]; then
+    pass "SDEV_HOME writable"
+else
+    fail "SDEV_HOME not writable: $SDEV_HOME"
 fi
 
-if [[ "$json" -eq 1 ]]; then
-    jq -n --argjson ok "$overall" --argjson checks "$checks" '{ok: $ok, checks: $checks, next: []}'
+echo
+echo "=== state ledger ==="
+if [[ ! -f "$STATE_FILE" ]]; then
+    warn "no ledger yet at $STATE_FILE (created on first 'sdev new')"
 else
-    echo "sdev doctor"
-    jq -r '.[] | "  " + (if .ok then "✓" else "✗" end) + " " + .name + " — " + .detail' <<<"$checks"
-    if [[ "$overall" == true ]]; then
-        echo "  all required tooling present"
+    if yq -e '.' "$STATE_FILE" >/dev/null 2>&1; then
+        pass "ledger parses: $STATE_FILE"
     else
-        echo "  Next: install the missing tooling above, then re-run: sdev doctor" >&2
+        fail "ledger is not valid YAML: $STATE_FILE"
     fi
+
+    # Stale lock?
+    if [[ -d "$STATE_LOCK" ]]; then
+        lpid="$(cat "$STATE_LOCK/pid" 2>/dev/null || true)"
+        if [[ -n "$lpid" ]] && kill -0 "$lpid" 2>/dev/null; then
+            warn "state lock currently held by live pid $lpid"
+        else
+            warn "stale state lock present (holder pid '${lpid:-?}' dead) — self-heals on next use, or: rm -rf '$STATE_LOCK'"
+        fi
+    else
+        pass "state lock free"
+    fi
+
+    # Ledger vs disk: every alive task .env offset should match the ledger, and
+    # every ledger task should be leased/locked or have a workspace on disk.
+    drift=0
+    while IFS= read -r env; do
+        [[ -n "$env" ]] || continue
+        off="$(grep -E '^PORT_OFFSET=' "$env" 2>/dev/null | head -1 | cut -d= -f2)"
+        [[ -n "$off" ]] || continue
+        key="$(_state_key_from_env "$env")"
+        loff="$(K="$key" yq -r '.tasks[strenv(K)].offset // ""' "$STATE_FILE" 2>/dev/null)"
+        if [[ -z "$loff" || "$loff" == "null" ]]; then
+            warn "task '$key' (offset $off on disk) is missing from the ledger — will be adopted on next allocation"
+            drift=1
+        elif [[ "$loff" != "$off" ]]; then
+            fail "offset drift for '$key': disk=$off ledger=$loff"
+            drift=1
+        fi
+    done < <(find "$SDEV_HOME/projects" -type f -name .env 2>/dev/null | grep -v "/_archive/" || true)
+    [[ $drift -eq 0 ]] && pass "ledger offsets match on-disk tasks"
+
+    # Duplicate offsets in the ledger (the bug this feature prevents).
+    dupes="$(yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null | sort | uniq -d)"
+    if [[ -n "$dupes" ]]; then
+        fail "duplicate offsets in ledger: $(echo "$dupes" | tr '\n' ' ')"
+    else
+        pass "no duplicate offsets in ledger"
+    fi
+
+    # Pool entries point at real worktree dirs.
+    poolbad=0
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        if [[ ! -d "$p" ]]; then
+            warn "pool entry missing on disk: $p (prune with 'sdev end' bookkeeping or edit the ledger)"
+            poolbad=1
+        fi
+    done < <(pool_paths)
+    [[ $poolbad -eq 0 ]] && pass "warm-pool entries present on disk"
 fi
 
-[[ "$overall" == true ]] || exit 2
-exit 0
+echo
+if [[ $FAILED -eq 0 ]]; then
+    echo "doctor: OK"
+    exit 0
+else
+    echo "doctor: problems found (see FAIL lines above)"
+    exit 1
+fi

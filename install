@@ -156,13 +156,14 @@ else
     ok=0
 fi
 if command -v jq >/dev/null 2>&1; then say "✓ jq ($(jq --version 2>/dev/null))"; else
-    warn "✗ jq not found (required for machine-readable output: sdev status/ls/ps/doctor --json)."
-    if [[ "$os" == Darwin ]]; then warn "   macOS: brew install jq"
-    else warn "   Linux: install jq via your package manager"; fi
-    ok=0; fi
+    warn "⚠️  jq not found — needed for machine-readable output (sdev status/ls/ps --json), not required to install."
+fi
+# docker is a RUNTIME dep (needed for 'sdev up'), not an install-time one — warn,
+# don't block. This keeps the installer usable on machines that add Docker later
+# (and lets CI run the suite on runners without Docker, e.g. GitHub macOS).
 if command -v docker >/dev/null 2>&1; then say "✓ docker"; else
-    warn "✗ docker not found (needed for 'sdev up'). Install Docker Desktop or OrbStack."
-    ok=0; fi
+    warn "⚠️  docker not found — install Docker Desktop or OrbStack before 'sdev up' (not required to install)."
+fi
 if command -v git >/dev/null 2>&1; then say "✓ git"; else
     warn "✗ git not found (required for project setup and tasks)."
     if [[ "$os" == Darwin ]]; then warn "   macOS: xcode-select --install (or brew install git)"
@@ -184,14 +185,14 @@ if [[ "$SRC_DIR" == "$INSTALL_DIR" ]]; then
     say "✓ tool already at $INSTALL_DIR (running from install dir; skipping copy)"
 else
     mkdir -p "$INSTALL_DIR"
-    for item in bin core README.md LICENSE VERSION confs install claude; do
+    for item in bin core README.md LICENSE VERSION confs install install.sh self-update claude; do
         [[ -e "$SRC_DIR/$item" ]] || continue
         rm -rf "${INSTALL_DIR:?}/$item"
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"
     done
     chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
     chmod +x "$INSTALL_DIR/claude/hooks/"* 2>/dev/null || true
-    chmod +x "$INSTALL_DIR/install" 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/install" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/self-update" 2>/dev/null || true
     say "✓ tool installed to $INSTALL_DIR"
 fi
 
@@ -237,6 +238,11 @@ say "✓ user-data home ready at $HOME_DIR"
 mkdir -p "$BIN_DIR"
 ln -sf "$INSTALL_DIR/bin/sdev" "$BIN_DIR/sdev"
 say "✓ linked $BIN_DIR/sdev -> $INSTALL_DIR/bin/sdev"
+# Standalone self-update entrypoint (works even without the `sdev update` dispatch).
+if [[ -f "$INSTALL_DIR/self-update" ]]; then
+    ln -sf "$INSTALL_DIR/self-update" "$BIN_DIR/sdev-update"
+    say "✓ linked $BIN_DIR/sdev-update -> $INSTALL_DIR/self-update"
+fi
 if [[ $FROM_PROMPT -eq 1 ]]; then
     # We chose the project home for the user, so own the rc wiring too (SDEV_HOME + PATH).
     persist_rc "$(detect_rc)"

@@ -20,7 +20,19 @@ A small CLI for running many **isolated, parallel docker-compose workspaces** �
 > prints the URL elsewhere. Repo base branches default to `main` — set
 > `master`/`develop` per repo in `sdev init`/`sdev edit`.
 
-## Install (from the zip)
+## Install
+
+**One-line install (macOS / Linux):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/santhosh2011/sdev/main/install.sh | bash
+```
+
+This downloads the latest published release, verifies its SHA-256, unpacks it, and hands off to the bundled installer (which places the tool, wires your shell, and preserves any existing data). Knobs (all optional): `SDEV_VERSION=v1.2.3` to pin a release, `SDEV_REPO=owner/repo` to install from a fork, `SDEV_HOME=/path` to set the project home non-interactively.
+
+**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS — it ships 3.2), [mikefarah `yq`](https://github.com/mikefarah/yq) v4 (**not** the Python `yq`), and git. docker + compose (Docker Desktop or OrbStack) is only needed to *run stacks* (`sdev up`) — the installer warns if it's missing but installs anyway, so you can add Docker later.
+
+### From the zip
 
 You'll receive a `sdev-<version>.zip`. Then:
 
@@ -40,12 +52,10 @@ When run interactively, `./install` **prompts for your project home** (where pro
 
 `./install` is idempotent and never touches your data under `$SDEV_HOME`.
 
-**Requirements** (the installer checks these): bash ≥ 4 (`brew install bash` on macOS), [yq](https://github.com/mikefarah/yq) v4, [jq](https://jqlang.github.io/jq/), and docker + compose (Docker Desktop or OrbStack).
-
 ### Where things live
 
 - **Tool code:** `~/.local/share/sdev` (replaceable; overwritten on upgrade).
-- **Your data — `$SDEV_HOME`, default `~/.sdev`:** project definitions (`core/projects.d/`), env profiles/secrets (`confs/`), repo clones (`core/<project>/`), and live workspaces (`projects/`). Survives upgrades.
+- **Your data — `$SDEV_HOME`, default `~/.sdev`:** project definitions (`core/projects.d/`), env profiles/secrets (`confs/`), repo clones (`core/<project>/`), live workspaces (`projects/`), and the allocation ledger + warm pool (`state/`). Survives upgrades.
 
 ## Configure your first project
 
@@ -100,7 +110,14 @@ for `sdev up` to run your actual app.
 | `sdev code / cd <slug>` | open the task dir in your editor / print its path |
 | `sdev down / nuke <slug>` | stop (keep volumes) / stop + reclaim volumes |
 | `sdev ls` | list all tasks across projects (the work-list dashboard) |
-| `sdev end <slug>` | tear down + archive a finished task |
+| `sdev end <slug> [--pool]` | tear down + archive (or return the worktree to the warm pool) |
+| `sdev new <slug> --ephemeral` | create a short-lived, auto-reclaimable task (never pooled) |
+| `sdev destroy <slug> [--force]` | force-remove a task: worktree + offset + entry, no archive |
+| `sdev prune [--apply] [--pool]` | reclaim ephemeral/abandoned slots; `--pool` drains the warm pool |
+| `sdev lease <slug> [holder]` | durably reserve a task (survives with no live process) |
+| `sdev release <slug>` | drop a task's lease + process-lock |
+| `sdev hold <slug>` | attach a self-healing process-lock (this shell) |
+| `sdev doctor` | check deps + state-ledger integrity |
 
 ```bash
 sdev use acme
@@ -114,6 +131,48 @@ sdev open login-fix
 ## Running in parallel
 
 Pin different projects in different terminals (`sdev use acme` here, `sdev use beta` there). Port offsets are allocated from a single global pool across every project, so multiple stacks can be `up` simultaneously with no host-port collisions.
+
+Allocation is **lock-protected**: every `sdev new` reserves its port offset from a central ledger under a portable lock, so two `sdev new` running at the same time (e.g. several agents) can never be handed the same offset. (Before this, both scanned for a free offset before either wrote its `.env` and collided on the second `sdev up`.)
+
+## Central state, the warm pool & leases
+
+sdev keeps one lock-protected ledger at **`$SDEV_HOME/state/state.yml`** — the single source of truth for port-offset allocation, the warm worktree pool, and per-task lease/lock state. All reads-and-writes of shared state go through a portable `mkdir(2)` lock (no `flock(1)`, which macOS lacks). On first use the ledger is **seeded from your existing tasks' `.env` `PORT_OFFSET`s**, so it never hands out an offset already in use.
+
+**Warm pool.** `sdev end --pool` returns a task's git worktrees to a pool under `$SDEV_HOME/state/pool/` instead of deleting them: each tree is reset clean but its **gitignored deps / build caches** (`node_modules`, `build/`, `.venv`, `target/`, …) are kept. The next `sdev new` for the same repo **reuses** a pooled worktree — re-branding it to `task/<slug>` at the fresh base — so you skip a full checkout and re-install. An empty pool (or `--no-pool`) falls back to a fresh worktree.
+
+```bash
+sdev end login-fix --pool     # keep the worktree warm instead of deleting it
+sdev new next-feature         # reuses it: deps/caches intact, rebranded to task/next-feature
+```
+
+**Leases & process-locks.** A task's port offset is only reclaimed when its workspace is gone *and* nothing holds it. Two things hold it:
+
+- **Lease** — a *durable* reservation with no live process, for a background agent keeping a task across sessions or reboots. `sdev lease <slug> [holder]` sets it; a leased task is never auto-reclaimed until `sdev release <slug>`. Leases (even with no workspace) show under `sdev ls`.
+- **Process-lock** — `sdev hold <slug>` pins a task to a live process (pid + start-time). It **self-heals**: once that process is gone (or its pid is reused, caught via the start-time), the lock reads as stale and the offset becomes reclaimable again.
+
+`sdev ls` annotates each task with its state — `[ephemeral]`, `[leased:holder]`, `[lock:pid]`, or `[lock:stale]` (markers combine, e.g. `[ephemeral lock:1234]`) — and lists the warm pool. Run `sdev doctor` to check dependencies and ledger integrity (offset drift, duplicates, stale locks, orphaned pool entries).
+
+## Ephemeral tasks & pruning
+
+**Ephemeral tasks.** `sdev new <slug> --ephemeral` creates a *durable-lease-free, short-lived* slot that is **eligible for automatic reclamation**. It is the opposite of a leased task: it can never be leased (the two flags are mutually exclusive), it is **torn down fully on `sdev end`** — the worktree is removed and the offset freed, and it is **never returned to the warm pool** (no cached deps kept), and `sdev prune` will sweep it. Use it for throwaway checks and short agent runs you don't want to remember to clean up.
+
+**`sdev prune`** is the safe, automatic-eligible sweep. By default it is a **dry-run** that previews what it would reclaim; pass `--apply` (or `-y`) to perform it:
+
+- **ephemeral tasks** — reclaimed fully (worktree + offset + ledger entry).
+- **abandoned ledger entries** — an offset reserved for a task whose workspace is gone and that is neither leased nor live-locked; the entry is dropped and the offset freed (the self-heal, no data to lose).
+- **stale warm-pool entries** — pool records whose worktree vanished on disk.
+
+`sdev prune --pool` *additionally* **drains the warm pool**: it removes every cached worktree to free disk (draining touches only pooled worktrees, never a live task). `--pool-only` drains the pool and leaves task reservations alone. `--project <name>` scopes the sweep. Prune **never** reclaims a task holding a live lease or a live process-lock — including an ephemeral one you have `sdev hold`-ed.
+
+**`sdev destroy <slug>`** is the targeted nuke for a single task: it force-removes the worktree, deletes the `task/<slug>` branches, stops the stack, and frees the offset + ledger entry — **no archive, no pre-flight**. It refuses a task with a live lease or live process-lock unless you pass `--force`.
+
+```bash
+sdev new probe --ephemeral   # throwaway slot; auto-reclaimable, never pooled
+sdev prune                   # preview: what would be reclaimed?
+sdev prune --apply           # reclaim ephemeral + abandoned slots + stale pool entries
+sdev prune --pool --apply    # …and drain the warm pool to reclaim disk
+sdev destroy wedged-task -f  # force-remove one specific task, lease/lock and all
+```
 
 ## Claude Code integration
 
@@ -156,7 +215,13 @@ outside a task dir.
 
 ## Upgrading
 
-Unzip the newer `sdev-<version>.zip` and re-run `./install`. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced.
+Update in place to the latest release:
+
+```bash
+sdev update        # or the standalone alias: sdev-update
+```
+
+This fetches the latest published release, verifies its SHA-256, and reinstalls the tool code. Your `~/.sdev` config, secrets, clones, and workspaces are preserved — only the tool code is replaced. Pin a specific release with `SDEV_VERSION=v1.2.3 sdev update`. (Equivalently, unzip a newer `sdev-<version>.zip` and re-run `./install`.)
 
 ### Coming from an older in-repo layout?
 
@@ -173,8 +238,13 @@ sdev migrate --from /path/to/old/sdev-clone
 - **`docker: command not found` / daemon errors on `sdev up`:** start Docker
   Desktop or OrbStack; sdev shells out to `docker compose`/`docker-compose`.
 - **"port is already allocated":** another task or app holds the port. Each task
-  gets a unique offset; stop a conflicting task (`sdev down <slug>`) or an
-  unrelated process. Ports are listed by `sdev ls`.
+  gets a unique offset (reserved under the state lock), so the culprit is usually
+  an unrelated process — stop it, or stop a conflicting task (`sdev down <slug>`).
+  Ports are listed by `sdev ls`; run `sdev doctor` to check the ledger.
+- **"state lock busy":** a previous `sdev` was killed mid-write and left
+  `$SDEV_HOME/state/lock`. sdev self-heals a lock whose owner process is dead;
+  if it persists, remove it manually (`rm -rf "$SDEV_HOME/state/lock"`) once no
+  `sdev` is running. `sdev doctor` reports a stale lock.
 - **macOS: "bash >= 4 required":** macOS ships bash 3.2. `brew install bash`
   (sdev's scripts use `#!/usr/bin/env bash`, so a newer bash on `PATH` is used).
 - **`yq` errors / wrong output:** sdev needs **mikefarah `yq` v4**, not the

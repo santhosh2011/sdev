@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# sdev self-update — fetch the latest release and reinstall in place.
+#
+# Reuses install.sh (the network installer) as the download/verify/unpack engine
+# and the bundled ./install as the placement engine, so there is a single source
+# of truth for how sdev gets onto disk. Your $SDEV_HOME data is preserved.
+#
+# Invoked as `sdev update`, `sdev-update`, or directly. Reports old -> new.
+#
+# Env knobs (all optional):
+#   SDEV_INSTALL   tool dir to update           (default: autodetect / ~/.local/share/sdev)
+#   SDEV_VERSION   pin a specific tag/version   (default: latest release)
+#   SDEV_REPO      owner/repo                    (default: santhosh2011/sdev)
+#   SDEV_DIST_ZIP  update from a local zip       (offline / tests)
+# -----------------------------------------------------------------------------
+
+REPO="${SDEV_REPO:-santhosh2011/sdev}"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+die()  { warn "✗ $*"; exit 1; }
+
+# Read a version file, stripping any release-please annotation comment.
+read_version() {
+    local f="$1"
+    [[ -f "$f" ]] || { printf 'unknown'; return; }
+    local v
+    v="$(sed -E 's/[[:space:]]*#.*$//' "$f" 2>/dev/null | tr -d '[:space:]')"
+    printf '%s' "${v:-unknown}"
+}
+
+case "${1:-}" in
+    -h|--help)
+        cat <<EOF
+Usage: sdev update            # or: sdev-update
+Fetch the latest sdev release and reinstall in place (preserving \$SDEV_HOME).
+Env: SDEV_INSTALL, SDEV_VERSION, SDEV_REPO, SDEV_DIST_ZIP.
+EOF
+        exit 0 ;;
+esac
+
+# --- resolve the install (tool) directory -----------------------------------
+INSTALL_DIR="${SDEV_INSTALL:-}"
+if [[ -z "$INSTALL_DIR" ]]; then
+    # This script ships at the install-dir root, next to VERSION and bin/sdev.
+    if [[ -f "$SELF_DIR/VERSION" && -x "$SELF_DIR/bin/sdev" ]]; then
+        INSTALL_DIR="$SELF_DIR"
+    else
+        INSTALL_DIR="$HOME/.local/share/sdev"
+    fi
+fi
+
+old_ver="$(read_version "$INSTALL_DIR/VERSION")"
+say "sdev: current version ${old_ver} (installed at $INSTALL_DIR)"
+
+# --- locate the installer engine (install.sh) -------------------------------
+installer=""
+for cand in "$INSTALL_DIR/install.sh" "$SELF_DIR/install.sh"; do
+    [[ -f "$cand" ]] && { installer="$cand"; break; }
+done
+TMP=""
+if [[ -z "$installer" ]]; then
+    # Fall back to fetching the bootstrap installer from the repo.
+    TMP="$(mktemp -d)"
+    trap 'rm -rf "$TMP"' EXIT
+    installer="$TMP/install.sh"
+    url="https://raw.githubusercontent.com/$REPO/main/install.sh"
+    say "→ fetching installer from $url"
+    if command -v curl >/dev/null 2>&1; then curl -fsSL "$url" -o "$installer"
+    elif command -v wget >/dev/null 2>&1; then wget -qO "$installer" "$url"
+    else die "need curl or wget to fetch the installer."; fi
+fi
+
+# --- run it: fetch the target release, non-interactive, preserve the home ---
+[[ -n "${SDEV_HOME:-}" ]] || warn "⚠️  SDEV_HOME is not set in this shell — the installer will use its default (~/.sdev). Set SDEV_HOME to update in place."
+
+say "→ updating…"
+SDEV_INSTALL="$INSTALL_DIR" SDEV_REPO="$REPO" \
+    bash "$installer" </dev/null
+
+new_ver="$(read_version "$INSTALL_DIR/VERSION")"
+
+say ""
+if [[ "$old_ver" == "$new_ver" ]]; then
+    say "✓ sdev is up to date (${new_ver})."
+else
+    say "✓ sdev updated: ${old_ver} → ${new_ver}"
+fi
