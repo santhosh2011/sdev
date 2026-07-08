@@ -78,6 +78,19 @@ EOF
   [[ "$output" == *"deny"* ]]
 }
 
+@test "staging-guard: allows a command that only mentions the word 'staging' (no --env staging)" {
+  # A git commit message that references 'sdev up' and 'staging' must not be blocked.
+  run bash -c "printf '%s' '{\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m boot-via sdev up reuses staging guard\"}}' | '$HOOKS/sdev-staging-guard'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "staging-guard: denies the --env=staging form outside a task dir" {
+  run bash -c "printf '%s' '{\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sdev up feature --env=staging\"}}' | '$HOOKS/sdev-staging-guard'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"deny"* ]]
+}
+
 @test "edit-reminder: reminds to restart the stack inside a task dir" {
   td="$(make_task_dir local)"
   run bash -c "printf '%s' '{\"cwd\":\"$td\",\"tool_name\":\"Edit\"}' | '$HOOKS/sdev-edit-reminder'"
