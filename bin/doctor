@@ -73,13 +73,15 @@ else
     fi
 
     # Stale lock?
-    if [[ -d "$STATE_LOCK" ]]; then
-        lpid="$(cat "$STATE_LOCK/pid" 2>/dev/null || true)"
+    if [[ -L "$STATE_LOCK" ]]; then
+        lpid="$(readlink "$STATE_LOCK" 2>/dev/null | cut -d: -f1 || true)"
         if [[ -n "$lpid" ]] && kill -0 "$lpid" 2>/dev/null; then
             warn "state lock currently held by live pid $lpid"
         else
-            warn "stale state lock present (holder pid '${lpid:-?}' dead) — self-heals on next use, or: rm -rf '$STATE_LOCK'"
+            warn "stale state lock present (holder pid '${lpid:-?}' dead) — self-heals on next use, or: rm -f '$STATE_LOCK'"
         fi
+    elif [[ -e "$STATE_LOCK" ]]; then
+        warn "legacy state lock present — self-heals on next use, or: rm -rf '$STATE_LOCK'"
     else
         pass "state lock free"
     fi
