@@ -7,12 +7,88 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
 
 SCOPE_PROJECT=""
+JSON=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --project) SCOPE_PROJECT="$2"; shift 2 ;;
+        --json) JSON=1; shift ;;
         *) shift ;;
     esac
 done
+
+# Running-container count for a compose project name (0 when none / docker absent).
+lt_running() {   # $1=compose_project_name
+    { docker ps --filter "label=com.docker.compose.project=$1" -q 2>/dev/null || true; } | wc -l | tr -d ' '
+}
+
+# ---- machine-readable output (opt-in) -----------------------------------------
+if [[ "$JSON" -eq 1 ]]; then
+    alive="[]"; archived="[]"; orphans="[]"; running_total=0
+    shopt -s nullglob
+
+    add_alive() {   # $1=label $2=envfile
+        local env="$2" np off cpn running status url
+        np="$(grep '^NGINX_HOST_PORT=' "$env" | cut -d= -f2 || true)"
+        off="$(grep '^PORT_OFFSET=' "$env" | cut -d= -f2 || true)"
+        cpn="$(grep '^COMPOSE_PROJECT_NAME=' "$env" | cut -d= -f2 || true)"
+        [[ -z "$cpn" ]] && cpn="$1"
+        running="$(lt_running "$cpn")"
+        status="stopped"; [[ "${running:-0}" -gt 0 ]] && status="running"
+        url=""; [[ -n "$np" ]] && url="http://localhost:$np/"
+        running_total=$((running_total + running))
+        alive="$(jq -c --arg t "$1" --argjson off "${off:-0}" --argjson port "${np:-0}" \
+            --arg url "$url" --argjson running "$running" --arg status "$status" \
+            '. + [{task:$t, offset:$off, nginx_port:$port, url:$url, running:$running, status:$status}]' <<<"$alive")"
+    }
+    add_archived() {   # $1=label $2=dir
+        local date
+        date="$(grep '^- archive_date:' "$2/ARCHIVE_INFO.md" 2>/dev/null | cut -d: -f2- | xargs || true)"
+        archived="$(jq -c --arg t "$1" --arg d "$date" '. + [{task:$t, archived:$d}]' <<<"$archived")"
+    }
+
+    for pdir in "$SDEV_HOME"/projects/*/; do
+        name="$(basename "$pdir")"
+        [[ "$name" == "_archive" ]] && continue
+        if [[ -f "$pdir/.env" ]]; then
+            [[ -n "$SCOPE_PROJECT" && "$SCOPE_PROJECT" != "default" ]] && continue
+            add_alive "$name" "$pdir/.env"; continue
+        fi
+        [[ -n "$SCOPE_PROJECT" && "$SCOPE_PROJECT" != "$name" ]] && continue
+        for tdir in "$pdir"*/; do
+            [[ -f "$tdir/.env" ]] || continue
+            add_alive "$name/$(basename "$tdir")" "$tdir/.env"
+        done
+    done
+
+    for adir in "$SDEV_HOME"/projects/_archive/*/; do
+        name="$(basename "$adir")"
+        if [[ -f "$adir/ARCHIVE_INFO.md" ]]; then
+            add_archived "$name" "$adir"; continue
+        fi
+        for tdir in "$adir"*/; do
+            [[ -d "$tdir" ]] || continue
+            add_archived "$name/$(basename "$tdir")" "$tdir"
+        done
+    done
+
+    known=$(ls -1 "$SDEV_HOME/projects/" "$SDEV_HOME/projects/_archive/" 2>/dev/null | sort -u | grep -v '^_archive$' || true)
+    while read -r vol; do
+        [[ -z "$vol" ]] && continue
+        proj="${vol%%_*}"
+        if ! grep -qx "$proj" <<< "$known"; then
+            orphans="$(jq -c --arg v "$vol" '. + [$v]' <<<"$orphans")"
+        fi
+    done < <(docker volume ls --format '{{.Name}}' 2>/dev/null || true)
+
+    jq -n --arg project "${SCOPE_PROJECT:-}" \
+        --argjson alive "$alive" --argjson archived "$archived" --argjson orphans "$orphans" \
+        --argjson running "$running_total" \
+        '{project: (if $project == "" then null else $project end),
+          alive: $alive, archived: $archived, orphan_volumes: $orphans,
+          totals: {alive: ($alive|length), archived: ($archived|length),
+                   orphans: ($orphans|length), running: $running}}'
+    exit 0
+fi
 
 echo "=== Alive tasks ==="
 shopt -s nullglob

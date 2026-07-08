@@ -42,6 +42,12 @@ else
     fail "yq not found on PATH — brew install yq"
 fi
 
+if command -v jq >/dev/null 2>&1; then
+    pass "jq $(jq --version 2>/dev/null)"
+else
+    warn "jq not found — needed for --json output (sdev status/ls/ps --json)"
+fi
+
 echo
 echo "=== paths ==="
 if [[ -d "$SDEV_HOME" ]]; then

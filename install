@@ -155,6 +155,9 @@ else
     else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
     ok=0
 fi
+if command -v jq >/dev/null 2>&1; then say "✓ jq ($(jq --version 2>/dev/null))"; else
+    warn "⚠️  jq not found — needed for machine-readable output (sdev status/ls/ps --json), not required to install."
+fi
 # docker is a RUNTIME dep (needed for 'sdev up'), not an install-time one — warn,
 # don't block. This keeps the installer usable on machines that add Docker later
 # (and lets CI run the suite on runners without Docker, e.g. GitHub macOS).

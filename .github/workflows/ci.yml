@@ -46,7 +46,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats
+          sudo apt-get install -y bats jq
           # mikefarah yq v4 (NOT the Python yq).
           sudo curl -fsSL \
             "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
@@ -56,7 +56,7 @@ jobs:
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
         # bash: macOS ships 3.2; the tool needs >= 4. bats-core + mikefarah yq.
-        run: brew install bats-core yq bash
+        run: brew install bats-core yq bash jq
 
       - name: Show versions
         run: |

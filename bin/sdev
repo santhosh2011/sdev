@@ -48,8 +48,9 @@ Commands:
   hold <slug> [--pid N]           attach a self-healing process-lock (default: this shell)
   new <slug> --ephemeral          create a short-lived, auto-reclaimable task
   doctor                          check deps + state-ledger integrity
-  ls | list                       list alive / archived / orphan tasks
-  ps <slug>                       compose ps for a task
+  ls | list [--json]              list alive / archived / orphan tasks
+  status [--json]                 fleet overview across all projects
+  ps <slug> [--json]              compose ps for a task
   logs <slug> [service…]          tail logs (-f); pass --no-follow to disable
   shell <slug> [service]          exec sh in service (default: project's shell service)
   open <slug>                     open http://localhost:<nginx-port>/ in browser
@@ -66,7 +67,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|init|edit|migrate|update|help|-h|--help) return 0 ;;
+        new|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|update|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -194,7 +195,10 @@ case "$CMD" in
         ;;
     ls|list)
         # shellcheck disable=SC2086
-        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"}
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
+        ;;
+    status)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/status" "$@"
         ;;
     up)
         slug=""; profile_flag=""; assume_yes=0
@@ -250,10 +254,31 @@ case "$CMD" in
         exec ./compose down -v --remove-orphans
         ;;
     ps)
-        slug="${1:-}"; shift || true
+        json=0; slug=""; extra=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --json) json=1; shift ;;
+                *) if [[ -z "$slug" ]]; then slug="$1"; else extra+=("$1"); fi; shift ;;
+            esac
+        done
         dir="$(require_task_dir "$slug")"
+        if [[ "$json" -eq 1 ]]; then
+            rel="${dir#"$SDEV_HOME"/projects/}"
+            port="$(grep '^NGINX_HOST_PORT=' "$dir/.env" 2>/dev/null | cut -d= -f2 || true)"
+            url=""; [[ -n "$port" ]] && url="http://localhost:$port/"
+            raw="$(cd "$dir" && ./compose ps --format json 2>/dev/null || true)"
+            services="$(printf '%s\n' "$raw" | jq -sc '
+                [ .[] | if type == "array" then .[] else . end ]
+                | [ .[] | {name: (.Service // .Name // ""), state: (.State // .Status // ""),
+                           ports: ([ (.Publishers // [])[] | select((.PublishedPort // 0) > 0)
+                                     | "\(.PublishedPort)->\(.TargetPort)" ]) } ]' 2>/dev/null || echo '[]')"
+            [[ -n "$services" ]] || services="[]"
+            jq -n --arg task "$rel" --arg url "$url" --argjson services "$services" \
+                '{task: $task, url: $url, services: $services}'
+            exit 0
+        fi
         cd "$dir"
-        exec ./compose ps "$@"
+        exec ./compose ps "${extra[@]}"
         ;;
     logs)
         slug="${1:-}"; shift || true

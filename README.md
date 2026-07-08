@@ -12,6 +12,7 @@ A small CLI for running many **isolated, parallel docker-compose workspaces** �
 
 - **bash ≥ 4** (macOS ships 3.2 — `brew install bash`)
 - **[yq](https://github.com/mikefarah/yq) v4** (`brew install yq`)
+- **[jq](https://jqlang.github.io/jq/)** (`brew install jq`) — for machine-readable output (`--json`)
 - **docker** + compose (Docker Desktop or OrbStack)
 
 > **Platforms:** macOS and Linux (incl. WSL). The installer detects your shell rc

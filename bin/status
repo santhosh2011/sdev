@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# sdev status — fleet overview across all defined projects. Human by default; --json for agents.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/sdev).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+json=0
+[[ "${1:-}" == "--json" ]] && json=1
+
+active="$(resolve_project "")"
+
+# Count running containers for a compose project name (0 when none / docker absent).
+count_running() {   # $1=compose_project_name
+    { docker ps --filter "label=com.docker.compose.project=$1" -q 2>/dev/null || true; } | wc -l | tr -d ' '
+}
+
+projects_json="[]"
+nproj=0; tot_tasks=0; tot_running=0
+shopt -s nullglob
+for p in $(config_projects); do
+    nproj=$((nproj + 1))
+    ptasks=0; prun=0
+    for d in "$SDEV_HOME"/projects/"$p"/*/; do
+        [[ -f "$d/.env" ]] || continue
+        ptasks=$((ptasks + 1))
+        cpn="$(grep '^COMPOSE_PROJECT_NAME=' "$d/.env" | cut -d= -f2 || true)"
+        [[ -z "$cpn" ]] && cpn="$(basename "$d")"
+        prun=$((prun + $(count_running "$cpn")))
+    done
+    tot_tasks=$((tot_tasks + ptasks)); tot_running=$((tot_running + prun))
+    projects_json="$(jq -c --arg n "$p" --argjson t "$ptasks" --argjson r "$prun" \
+        '. + [{name: $n, tasks: $t, running: $r}]' <<<"$projects_json")"
+done
+
+if [[ "$json" -eq 1 ]]; then
+    jq -n --arg home "$SDEV_HOME" --arg active "$active" \
+        --argjson projects "$projects_json" \
+        --argjson tp "$nproj" --argjson tt "$tot_tasks" --argjson tr "$tot_running" \
+        '{sdev_home: $home, active_project: $active, projects: $projects,
+          totals: {projects: $tp, tasks: $tt, running: $tr}, next: ["sdev ls --json  # per-task detail"]}'
+else
+    echo "sdev status"
+    echo "  SDEV_HOME: $SDEV_HOME"
+    echo "  active project: $active"
+    jq -r '.[] | "  \(.name)\ttasks=\(.tasks)\trunning=\(.running)"' <<<"$projects_json"
+    echo "  totals: projects=$nproj tasks=$tot_tasks running=$tot_running"
+    echo "  Next: sdev ls   # per-task detail"
+fi
