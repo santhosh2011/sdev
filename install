@@ -155,6 +155,11 @@ else
     else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
     ok=0
 fi
+if command -v jq >/dev/null 2>&1; then say "✓ jq ($(jq --version 2>/dev/null))"; else
+    warn "✗ jq not found (required for machine-readable output: sdev status/ls/ps/doctor --json)."
+    if [[ "$os" == Darwin ]]; then warn "   macOS: brew install jq"
+    else warn "   Linux: install jq via your package manager"; fi
+    ok=0; fi
 if command -v docker >/dev/null 2>&1; then say "✓ docker"; else
     warn "✗ docker not found (needed for 'sdev up'). Install Docker Desktop or OrbStack."
     ok=0; fi

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# sdev doctor — check the environment sdev needs. Human output by default; --json for agents.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/sdev).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+json=0
+[[ "${1:-}" == "--json" ]] && json=1
+
+# Build the checks array with jq (never hand-rolled JSON).
+checks="[]"
+overall=true
+add_check() {   # $1=name $2=ok(true|false) $3=detail
+    [[ "$2" == "false" ]] && overall=false
+    checks="$(jq -c --arg n "$1" --argjson ok "$2" --arg d "$3" \
+        '. + [{name:$n, ok:$ok, detail:$d}]' <<<"$checks")"
+}
+
+# bash >= 4
+if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+    add_check bash true "$BASH_VERSION"
+else
+    add_check bash false "$BASH_VERSION (need >= 4; brew install bash)"
+fi
+
+# yq (mikefarah v4)
+if command -v yq >/dev/null 2>&1; then
+    add_check yq true "$(yq --version 2>&1 | head -1)"
+else
+    add_check yq false "missing (brew install yq)"
+fi
+
+# jq
+if command -v jq >/dev/null 2>&1; then
+    add_check jq true "$(jq --version 2>&1 | head -1)"
+else
+    add_check jq false "missing (brew install jq)"
+fi
+
+# docker: binary is required; engine reachability is reported, not fatal.
+if command -v docker >/dev/null 2>&1; then
+    if docker ps >/dev/null 2>&1; then
+        add_check docker true "engine reachable"
+    else
+        add_check docker true "binary present, engine not reachable"
+    fi
+else
+    add_check docker false "missing (install Docker Desktop or OrbStack)"
+fi
+
+# SDEV_HOME exists
+if [[ -d "$SDEV_HOME" ]]; then
+    add_check sdev_home true "$SDEV_HOME"
+else
+    add_check sdev_home false "$SDEV_HOME (not found; run sdev init)"
+fi
+
+if [[ "$json" -eq 1 ]]; then
+    jq -n --argjson ok "$overall" --argjson checks "$checks" '{ok: $ok, checks: $checks, next: []}'
+else
+    echo "sdev doctor"
+    jq -r '.[] | "  " + (if .ok then "✓" else "✗" end) + " " + .name + " — " + .detail' <<<"$checks"
+    if [[ "$overall" == true ]]; then
+        echo "  all required tooling present"
+    else
+        echo "  Next: install the missing tooling above, then re-run: sdev doctor" >&2
+    fi
+fi
+
+[[ "$overall" == true ]] || exit 2
+exit 0

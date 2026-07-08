@@ -51,6 +51,12 @@ run_install_claude() {
   [ ! -f "$FAKEHOME/.zshrc" ]
 }
 
+@test "install checks for jq (a declared dependency)" {
+  run run_install
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"✓ jq"* ]]
+}
+
 @test "install is idempotent and preserves user data" {
   run run_install
   [ "$status" -eq 0 ]
