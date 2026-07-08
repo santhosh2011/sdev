@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# sdev ship — push the task's branch(es) and open/update a PR with the assignee set.
+# Merge stays a human decision. Human output by default; --json for agents.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/sdev).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
+
+json=0; force=0; assignee="@me"; slug=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --json) json=1; shift ;;
+        --force|-f) force=1; shift ;;
+        --assignee) assignee="$2"; shift 2 ;;
+        *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
+    esac
+done
+[[ -n "$slug" ]] || die "slug required (usage: sdev ship <slug> [--assignee <who>] [--force] [--json])"
+
+task_dir="$SDEV_HOME/projects/$PROJECT/$slug"
+[[ -d "$task_dir" ]] || task_dir="$SDEV_HOME/projects/$slug"
+[[ -d "$task_dir" ]] || die "task '$slug' not found in project '$PROJECT'"
+task_key="${task_dir#"$SDEV_HOME"/projects/}"
+
+have_gh=0; command -v gh >/dev/null 2>&1 && have_gh=1
+
+prs="[]"; pushed="[]"; shipped=0
+while read -r r; do
+    p="$(config_repo_path "$PROJECT" "$r")"
+    wt="$task_dir/$p"
+    [[ -d "$wt/.git" || -f "$wt/.git" ]] || continue
+    shipped=1
+    base="$(config_repo_base "$PROJECT" "$r")"
+
+    if [[ $force -eq 0 && -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]]; then
+        die "$r: working tree dirty -- commit/stash first, or pass --force"
+    fi
+
+    git -C "$wt" push -u origin "task/$slug" 1>&2 || die "$r: git push failed for task/$slug"
+    pushed="$(jq -c --arg r "$r" '. + [$r]' <<<"$pushed")"
+
+    url=""
+    if [[ $have_gh -eq 1 ]]; then
+        url="$(cd "$wt" && gh pr create --base "$base" --head "task/$slug" \
+                 --assignee "$assignee" --fill 2>/dev/null | tail -1 || true)"
+    fi
+    prs="$(jq -c --arg r "$r" --arg u "$url" '. + [{repo: $r, url: $u}]' <<<"$prs")"
+done < <(config_repos "$PROJECT")
+
+[[ "$shipped" -eq 1 ]] || die "no repo worktrees found under $task_dir"
+
+if [[ "$json" -eq 1 ]]; then
+    jq -n --arg t "$task_key" --arg p "$PROJECT" --arg a "$assignee" \
+        --argjson pushed "$pushed" --argjson prs "$prs" \
+        '{task: $t, project: $p, assignee: $a, pushed: $pushed, prs: $prs,
+          gh: ('"$have_gh"' == 1), next: ["merge is yours: gh pr merge"]}'
+else
+    echo "sdev ship: $task_key (assignee: $assignee)"
+    if [[ "$have_gh" -eq 1 ]]; then
+        jq -r '.[] | "  \(.repo): \(.url)"' <<<"$prs"
+    else
+        echo "  pushed $(jq -r 'join(", ")' <<<"$pushed") -- gh not found, open the PR manually"
+    fi
+    echo "  Next: merge is yours (gh pr merge)"
+fi
