@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# sdev start — the front door: create the task if needed, boot the stack, hand back the URL.
+# Collapses use -> new -> up -> open into one command. Human by default; --json for agents.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/sdev).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
+
+# Our own flags are peeled off; everything else passes through to new-task.
+json=0; no_open=0; passthru=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --json) json=1; shift ;;
+        --no-open) no_open=1; shift ;;
+        *) passthru+=("$1"); shift ;;
+    esac
+done
+
+slug=""
+for a in "${passthru[@]:-}"; do [[ -n "$a" && "$a" != -* ]] && { slug="$a"; break; }; done
+[[ -n "$slug" ]] || die "slug required (usage: sdev start <slug> [new-task flags] [--no-open] [--json])"
+
+# Locate an existing task; else create it, passing every non-start flag to new-task.
+task_dir=""
+if [[ -d "$SDEV_HOME/projects/$PROJECT/$slug" ]]; then task_dir="$SDEV_HOME/projects/$PROJECT/$slug"
+elif [[ -d "$SDEV_HOME/projects/$slug" ]]; then task_dir="$SDEV_HOME/projects/$slug"; fi
+
+created=false
+if [[ -z "$task_dir" ]]; then
+    env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "${passthru[@]}" >&2 || die "create failed for '$slug'"
+    created=true
+    task_dir="$SDEV_HOME/projects/$PROJECT/$slug"
+fi
+
+# Boot via `sdev up` so the staging guard + profile handling are reused. Forward --yes.
+up_flags=()
+for a in "${passthru[@]:-}"; do [[ "$a" == "--yes" || "$a" == "-y" ]] && up_flags+=(--yes); done
+run_up() {
+    if [[ ${#up_flags[@]} -gt 0 ]]; then
+        env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/sdev" -p "$PROJECT" up "$slug" "${up_flags[@]}"
+    else
+        env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/sdev" -p "$PROJECT" up "$slug"
+    fi
+}
+if ! run_up >&2; then
+    if [[ "$json" -eq 1 ]]; then
+        jq -n --arg t "$PROJECT/$slug" --argjson created "$created" \
+            '{error: {code: "up_failed", message: "stack failed to start",
+                      hint: "sdev logs \($t | split("/") | last)"}, task: $t, created: $created}'
+    else
+        echo "sdev start: stack failed to start for $PROJECT/$slug (task left in place — see: sdev logs $slug)" >&2
+    fi
+    exit 2
+fi
+
+port="$(grep '^NGINX_HOST_PORT=' "$task_dir/.env" 2>/dev/null | cut -d= -f2 || true)"
+url=""; [[ -n "$port" ]] && url="http://localhost:$port/"
+env_profile="$(grep '^APP_ENV=' "$task_dir/.env" 2>/dev/null | cut -d= -f2 || true)"
+
+if [[ "$json" -eq 1 ]]; then
+    jq -n --arg t "$PROJECT/$slug" --arg p "$PROJECT" --arg env "$env_profile" \
+        --arg url "$url" --argjson port "${port:-0}" --argjson created "$created" \
+        '{task: $t, project: $p, env: $env, url: $url, nginx_port: $port, created: $created,
+          next: ["sdev logs \($t | split("/") | last)  # follow logs"]}'
+else
+    label="resumed"; [[ "$created" == true ]] && label="created"
+    echo "sdev start: $label $PROJECT/$slug${url:+ -> $url}"
+    if [[ -n "$url" ]]; then
+        if [[ "$no_open" -eq 0 ]] && command -v open >/dev/null 2>&1; then open "$url"; else echo "$url"; fi
+    fi
+fi

@@ -37,6 +37,7 @@ Project:
 
 Commands:
   new <slug> [flags…]             create a new task workspace
+  start <slug> [flags…]           front door: create-or-resume + boot + open (accepts new flags; --no-open, --json)
   up <slug> [extra…]              start the stack (docker-compose up -d)
   down <slug>                     stop the stack (docker-compose down)
   nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
@@ -67,7 +68,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|update|help|-h|--help) return 0 ;;
+        new|start|up|down|nuke|end|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|update|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -107,6 +108,9 @@ case "$CMD" in
         ;;
     new)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$@"
+        ;;
+    start)
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/start" "$@"
         ;;
     end)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
