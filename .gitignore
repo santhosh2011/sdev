@@ -13,3 +13,6 @@
 
 # dist build output
 /build/
+
+# compiled Go binary (built by CI / dev; strangler router falls back to bash)
+/bin/sdev-go
