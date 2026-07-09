@@ -73,8 +73,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bats jq
-          # mikefarah yq v4 (NOT the Python yq).
-          sudo curl -fsSL \
+          # mikefarah yq v4 (NOT the Python yq). Retry: the release CDN returns
+          # transient 5xx (a bare `curl -f` then hard-fails the whole job).
+          sudo curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
             "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
             -o /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
