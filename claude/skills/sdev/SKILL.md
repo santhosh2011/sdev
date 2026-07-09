@@ -48,9 +48,12 @@ Pin a project first (`sdev use <project>`) or pass `-p <project>` per command.
 | `sdev use <project>` | pin the active project for this terminal |
 | `sdev -p <project> <cmd>` | run one command against a project |
 | `sdev new <slug>` | create a task (worktrees + stack) |
+| `sdev start <slug>` | front door: create-or-resume + boot + open in one step (`--json`) |
 | `sdev up <slug>` | start the task's stack (detached) |
 | `sdev ps / logs / shell <slug>` | status / tail logs / shell into the service |
 | `sdev open <slug>` | open the task's nginx URL |
+| `sdev review <slug>` | render the task diff as an annotatable lavish surface + run the gate (`--json`) |
+| `sdev ship <slug>` | push the task branch(es) + open a PR with the assignee set (`--json`) |
 | `sdev code / cd <slug>` | open task dir in editor / print its path |
 | `sdev down / nuke <slug>` | stop (keep volumes) / stop + reclaim volumes |
 | `sdev ls` | list all tasks across projects (shows ephemeral/lease/lock state + warm pool) |
@@ -66,6 +69,17 @@ Pin a project first (`sdev use <project>`) or pass `-p <project>` per command.
 Pass `--no-fetch` to skip the fetch (offline, or a local repo with no remote).
 
 To go from zero to a running workspace in one step, use the `/sdev-start` command.
+
+## Agent API — the review → ship loop
+
+Driving sdev from an agent? Every read/lifecycle command takes `--json` (one JSON object on stdout, logs on stderr), so you read results instead of scraping text. The full loop:
+
+- `sdev start <slug> --json` — create-if-missing + boot + return the live URL.
+- work happens in the isolated stack.
+- `sdev review <slug> --json` — the diff as an annotatable lavish surface + the approve/fix/skip gate; exits `1` on `gate.status == "needs-decisions"`.
+- `sdev ship <slug> --json` — push + open a PR (assignee set). Merge stays the human's call.
+
+`sdev status --json`, `sdev ls --json`, `sdev ps <slug> --json` observe the fleet. Full schemas: `docs/agent-api.md`.
 
 ## Running in parallel
 
