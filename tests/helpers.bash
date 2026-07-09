@@ -31,6 +31,14 @@ make_fixture() {
     chmod +x "$WORKSPACE_ROOT/claude/hooks/"* 2>/dev/null || true
     chmod +x "$WORKSPACE_ROOT/bin/"*
 
+    # Ship the compiled Go binary into the fixture when it has been built, so
+    # bats exercises the ported (Go) path; when absent, bin/sdev falls back to
+    # the bash implementation and the same tests still pass.
+    if [[ -x "$REPO_BIN/sdev-go" ]]; then
+        cp "$REPO_BIN/sdev-go" "$WORKSPACE_ROOT/bin/sdev-go"
+        chmod +x "$WORKSPACE_ROOT/bin/sdev-go"
+    fi
+
     cat > "$WORKSPACE_ROOT/core/.task-config.yml" <<'YAML'
 repos:
   api: { path: legacy_api, default_base: main, compose_role: api }
