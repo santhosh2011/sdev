@@ -18,8 +18,12 @@ echo "url: http://127.0.0.1:4387/session/abc123"
 SH
   chmod +x "$WORKSPACE_ROOT/fakebin/lavish-axi"
   export PATH="$WORKSPACE_ROOT/fakebin:$PATH"
+  # Gate command points at a fake that does not exist by default, so the gate is
+  # deterministically "skipped" unless a test creates it (never runs a real one).
+  export SDEV_GATE_CMD="$WORKSPACE_ROOT/fakebin/gate"
   export TERM_SESSION_ID="bats-$$"; export TMPDIR="$WORKSPACE_ROOT/tmp"; mkdir -p "$TMPDIR"
 }
+stub_gate() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$WORKSPACE_ROOT/fakebin/gate"; chmod +x "$WORKSPACE_ROOT/fakebin/gate"; }
 teardown() { rm -rf "$WORKSPACE_ROOT"; }
 
 new_task_with_commit() {
@@ -50,4 +54,35 @@ new_task_with_commit() {
   art="$(echo "$output" | jq -r '.artifact')"
   [ -f "$art" ]
   [ ! -f "$WORKSPACE_ROOT/lavish.log" ]
+}
+
+@test "sdev review runs the gate and reports a clean verdict" {
+  new_task_with_commit gated
+  stub_gate 'echo "gate: OK"; exit 0'
+  run bash -c "'$WORKSPACE_ROOT/bin/sdev' -p web review gated --no-open --json 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.gate.status == "clean"' >/dev/null
+}
+
+@test "sdev review gate is skipped when the gate command is absent" {
+  new_task_with_commit nogate
+  run bash -c "'$WORKSPACE_ROOT/bin/sdev' -p web review nogate --no-open --json 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.gate.status == "skipped"' >/dev/null
+}
+
+@test "sdev review exits 1 when the gate reports needs-decisions" {
+  new_task_with_commit failing
+  stub_gate 'echo "2 findings need your call"; exit 1'
+  run bash -c "'$WORKSPACE_ROOT/bin/sdev' -p web review failing --no-open --json 2>/dev/null"
+  [ "$status" -eq 1 ]
+  echo "$output" | jq -e '.gate.status == "needs-decisions"' >/dev/null
+}
+
+@test "sdev review --no-gate skips the gate" {
+  new_task_with_commit skip
+  stub_gate 'exit 1'
+  run bash -c "'$WORKSPACE_ROOT/bin/sdev' -p web review skip --no-open --no-gate --json 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.gate.status == "skipped"' >/dev/null
 }

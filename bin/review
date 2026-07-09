@@ -16,11 +16,12 @@ source "$SCRIPT_DIR/_lib.sh"
 
 PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 
-json=0; no_open=0; slug=""
+json=0; no_open=0; no_gate=0; slug=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) json=1; shift ;;
         --no-open) no_open=1; shift ;;
+        --no-gate) no_gate=1; shift ;;
         *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
     esac
 done
@@ -34,12 +35,13 @@ task_key="${task_dir#"$SDEV_HOME"/projects/}"
 # HTML-escape stdin for embedding a diff in a <pre>.
 esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
 
-repos_json="[]"; body=""; found=0
+repos_json="[]"; body=""; found=0; first_wt=""
 while read -r r; do
     p="$(config_repo_path "$PROJECT" "$r")"
     wt="$task_dir/$p"
     [[ -d "$wt/.git" || -f "$wt/.git" ]] || continue
     found=1
+    [[ -z "$first_wt" ]] && first_wt="$wt"
     base="$(config_repo_base "$PROJECT" "$r")"
     baseref="$base"
     git -C "$wt" rev-parse --verify "origin/$base" >/dev/null 2>&1 && baseref="origin/$base"
@@ -86,14 +88,37 @@ if [[ "$no_open" -eq 0 ]] && command -v lavish-axi >/dev/null 2>&1; then
     lavish_url="$(lavish-axi "$art" 2>/dev/null | grep -oE 'https?://[^ ]+' | head -1 || true)"
 fi
 
+# Quality gate: run the configured gate command (default no-mistakes) once in the
+# first repo worktree; its exit code is the verdict. Graceful degrade when absent.
+gate_cmd="${SDEV_GATE_CMD:-no-mistakes}"
+gate_status="skipped"; gate_detail="$gate_cmd not run"
+if [[ "$no_gate" -eq 0 ]]; then
+    if command -v "$gate_cmd" >/dev/null 2>&1; then
+        if gate_out="$(cd "${first_wt:-$task_dir}" && "$gate_cmd" 2>&1)"; then
+            gate_status="clean"
+        else
+            gate_status="needs-decisions"
+        fi
+        gate_detail="$(printf '%s' "$gate_out" | head -1)"
+    else
+        gate_status="skipped"; gate_detail="$gate_cmd not installed"
+    fi
+fi
+
 if [[ "$json" -eq 1 ]]; then
     jq -n --arg t "$task_key" --arg p "$PROJECT" --argjson repos "$repos_json" \
         --arg art "$art" --arg url "$url" --arg lav "$lavish_url" \
+        --arg gs "$gate_status" --arg gd "$gate_detail" \
         '{task: $t, project: $p, repos: $repos, artifact: $art, url: $url, lavish_url: $lav,
+          gate: {status: $gs, detail: $gd},
           next: ["annotate the diff in lavish, then: sdev ship '"$slug"'"]}'
 else
     echo "sdev review: $task_key"
     jq -r '.[] | "  \(.repo): \(.files) files (+\(.added)/-\(.removed))"' <<<"$repos_json"
     if [[ -n "$lavish_url" ]]; then echo "  review surface: $lavish_url"; else echo "  artifact: $art"; fi
+    echo "  gate: $gate_status${gate_detail:+ ($gate_detail)}"
     echo "  Next: annotate, then sdev ship $slug"
 fi
+
+if [[ "$gate_status" == "needs-decisions" ]]; then exit 1; fi
+exit 0
