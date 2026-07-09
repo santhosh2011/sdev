@@ -2,6 +2,8 @@
 
 A small CLI for running many **isolated, parallel docker-compose workspaces** — grouped by **project**. Each task gets its own git worktrees, its own env profile, and its own stack on a unique set of host ports, so you can develop several features (and several projects) at once without anything colliding.
 
+Driving sdev from an agent (firstmate, or any orchestrator)? See the machine-readable [agent API](docs/agent-api.md): every read/lifecycle command takes `--json`, and the `start → review → ship` loop is scriptable end to end.
+
 ## Concepts
 
 - **Project** — a registry at `core/projects.d/<name>.yml` describing a product: which repos it uses, its env-profile conf prefix, its docker stack. Projects are independent and can run in parallel. With no project files, an implicit `default` project uses the fallback registry in `core/.task-config.yml`.
