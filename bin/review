@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# sdev review — render the task's diff as an annotatable lavish surface + a verdict.
+# The no-mistakes gate is layered on separately (Phase 2c). Human by default; --json for agents.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/sdev).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
+
+json=0; no_open=0; no_gate=0; slug=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --json) json=1; shift ;;
+        --no-open) no_open=1; shift ;;
+        --no-gate) no_gate=1; shift ;;
+        *) [[ -z "$slug" ]] && slug="$1" || die "unexpected arg: $1"; shift ;;
+    esac
+done
+[[ -n "$slug" ]] || die "slug required (usage: sdev review <slug> [--no-open] [--json])"
+
+task_dir="$SDEV_HOME/projects/$PROJECT/$slug"
+[[ -d "$task_dir" ]] || task_dir="$SDEV_HOME/projects/$slug"
+[[ -d "$task_dir" ]] || die "task '$slug' not found in project '$PROJECT'"
+task_key="${task_dir#"$SDEV_HOME"/projects/}"
+
+# HTML-escape stdin for embedding a diff in a <pre>.
+esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+
+repos_json="[]"; body=""; found=0; first_wt=""
+while read -r r; do
+    p="$(config_repo_path "$PROJECT" "$r")"
+    wt="$task_dir/$p"
+    [[ -d "$wt/.git" || -f "$wt/.git" ]] || continue
+    found=1
+    [[ -z "$first_wt" ]] && first_wt="$wt"
+    base="$(config_repo_base "$PROJECT" "$r")"
+    baseref="$base"
+    git -C "$wt" rev-parse --verify "origin/$base" >/dev/null 2>&1 && baseref="origin/$base"
+
+    files=0; added=0; removed=0
+    while read -r a d _; do
+        [[ -n "$a" ]] || continue
+        files=$((files + 1))
+        [[ "$a" =~ ^[0-9]+$ ]] && added=$((added + a))
+        [[ "$d" =~ ^[0-9]+$ ]] && removed=$((removed + d))
+    done < <(git -C "$wt" diff --numstat "$baseref...HEAD" 2>/dev/null)
+    repos_json="$(jq -c --arg r "$r" --argjson f "$files" --argjson a "$added" --argjson d "$removed" \
+        '. + [{repo: $r, files: $f, added: $a, removed: $d}]' <<<"$repos_json")"
+
+    diff_html="$(git -C "$wt" diff "$baseref...HEAD" 2>/dev/null | esc)"
+    body+="<h2 class=\"text-lg font-bold mt-6 mb-2\">$r <span class=\"opacity-60 text-sm\">($files files, +$added/-$removed)</span></h2>"
+    body+="<pre class=\"diff bg-base-100 rounded-box p-3 border\">$diff_html</pre>"
+done < <(config_repos "$PROJECT")
+[[ "$found" -eq 1 ]] || die "no repo worktrees found under $task_dir"
+
+port="$(grep '^NGINX_HOST_PORT=' "$task_dir/.env" 2>/dev/null | cut -d= -f2 || true)"
+url=""; [[ -n "$port" ]] && url="http://localhost:$port/"
+
+art_dir="$task_dir/.lavish"; mkdir -p "$art_dir"
+art="$art_dir/review-$slug.html"
+{
+    cat <<HTML
+<!DOCTYPE html><html lang="en" data-theme="luxury"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>review: $task_key</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>.diff{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}</style>
+</head><body class="bg-base-200 text-base-content"><div class="max-w-6xl mx-auto p-6">
+<h1 class="text-2xl font-bold mb-1">review: $task_key</h1>
+HTML
+    [[ -n "$url" ]] && echo "<p class=\"mb-2 text-sm\">live: <a class=\"link link-primary\" href=\"$url\">$url</a></p>"
+    printf '%s\n' "$body"
+    echo "</div></body></html>"
+} > "$art"
+
+lavish_url=""
+if [[ "$no_open" -eq 0 ]] && command -v lavish-axi >/dev/null 2>&1; then
+    lavish_url="$(lavish-axi "$art" 2>/dev/null | grep -oE 'https?://[^ ]+' | head -1 || true)"
+fi
+
+# Quality gate: run the configured gate command (default no-mistakes) once in the
+# first repo worktree; its exit code is the verdict. Graceful degrade when absent.
+gate_cmd="${SDEV_GATE_CMD:-no-mistakes}"
+gate_status="skipped"; gate_detail="$gate_cmd not run"
+if [[ "$no_gate" -eq 0 ]]; then
+    if command -v "$gate_cmd" >/dev/null 2>&1; then
+        if gate_out="$(cd "${first_wt:-$task_dir}" && "$gate_cmd" 2>&1)"; then
+            gate_status="clean"
+        else
+            gate_status="needs-decisions"
+        fi
+        gate_detail="$(printf '%s' "$gate_out" | head -1)"
+    else
+        gate_status="skipped"; gate_detail="$gate_cmd not installed"
+    fi
+fi
+
+if [[ "$json" -eq 1 ]]; then
+    jq -n --arg t "$task_key" --arg p "$PROJECT" --argjson repos "$repos_json" \
+        --arg art "$art" --arg url "$url" --arg lav "$lavish_url" \
+        --arg gs "$gate_status" --arg gd "$gate_detail" \
+        '{task: $t, project: $p, repos: $repos, artifact: $art, url: $url, lavish_url: $lav,
+          gate: {status: $gs, detail: $gd},
+          next: ["annotate the diff in lavish, then: sdev ship '"$slug"'"]}'
+else
+    echo "sdev review: $task_key"
+    jq -r '.[] | "  \(.repo): \(.files) files (+\(.added)/-\(.removed))"' <<<"$repos_json"
+    if [[ -n "$lavish_url" ]]; then echo "  review surface: $lavish_url"; else echo "  artifact: $art"; fi
+    echo "  gate: $gate_status${gate_detail:+ ($gate_detail)}"
+    echo "  Next: annotate, then sdev ship $slug"
+fi
+
+if [[ "$gate_status" == "needs-decisions" ]]; then exit 1; fi
+exit 0
