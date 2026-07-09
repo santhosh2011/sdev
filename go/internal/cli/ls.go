@@ -22,18 +22,30 @@ const legacyDefaultProject = "default"
 // VolumeLister lists docker volume names; injected for hermetic tests.
 type VolumeLister func() []string
 
-// LS implements the machine-readable `sdev ls --json [--project <p>]`. The human
-// listing stays in bash (it reads the ledger); bin/sdev routes only --json here.
+// LS implements `sdev ls [--project <p>] [--json]`: a machine-readable report
+// with --json, else the human listing.
 func LS(args []string) int {
 	scope := ""
+	jsonOut := false
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--project" && i+1 < len(args) {
-			scope = args[i+1]
-			i++
+		switch args[i] {
+		case "--project":
+			if i+1 < len(args) {
+				scope = args[i+1]
+				i++
+			}
+		case "--json":
+			jsonOut = true
 		}
 	}
 
-	report := BuildLSReport(paths.Home(), scope, dockerx.RunningByComposeProject, dockerx.Volumes)
+	home := paths.Home()
+	if !jsonOut {
+		printLSHuman(home, scope)
+		return 0
+	}
+
+	report := BuildLSReport(home, scope, dockerx.RunningByComposeProject, dockerx.Volumes)
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {

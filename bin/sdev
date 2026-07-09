@@ -203,7 +203,7 @@ case "$CMD" in
         log "process-lock on $key held by pid $pid (self-heals when it exits)"
         ;;
     doctor)
-        exec "$SCRIPT_DIR/doctor"
+        run_ported doctor doctor "$@"
         ;;
     init)
         exec "$SCRIPT_DIR/init"
@@ -222,12 +222,7 @@ case "$CMD" in
         ;;
     ls|list)
         # shellcheck disable=SC2086
-        # Only the machine path is ported; the human listing reads the ledger
-        # and stays in bash until the state package lands.
-        for a in "$@"; do
-            [[ "$a" == "--json" ]] && try_go ls ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
-        done
-        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
+        run_ported ls list-tasks ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
         ;;
     status)
         run_ported status status "$@"
