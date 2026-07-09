@@ -113,9 +113,27 @@ teardown() { rm -rf "$WORKSPACE_ROOT"; }
 @test "the state lock self-heals when its holder is dead" {
   source "$WORKSPACE_ROOT/bin/_lib.sh"
   mkdir -p "$SDEV_STATE_DIR"
-  mkdir "$STATE_LOCK"
-  echo 999999 > "$STATE_LOCK/pid"    # a dead holder
+  ln -s 999999 "$STATE_LOCK"         # dead holder, encoded in the lock symlink
   run with_state_lock true           # must break the stale lock and proceed
   [ "$status" -eq 0 ]
-  [ ! -d "$STATE_LOCK" ]             # released afterwards
+  [ ! -e "$STATE_LOCK" ]             # released afterwards
+}
+
+@test "state lock carries the holder pid the instant it is held (no pid-less window)" {
+  source "$WORKSPACE_ROOT/bin/_lib.sh"
+  mkdir -p "$SDEV_STATE_DIR"
+  _held_is_symlink_to_me() { [[ -L "$STATE_LOCK" ]] && [[ "$(readlink "$STATE_LOCK")" == "$$"* ]]; }
+  run with_state_lock _held_is_symlink_to_me
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE_LOCK" ]
+}
+
+@test "the state lock self-heals a legacy dir lock left by an older sdev" {
+  source "$WORKSPACE_ROOT/bin/_lib.sh"
+  mkdir -p "$SDEV_STATE_DIR"
+  mkdir "$STATE_LOCK"                # old scheme: a dir
+  echo 999999 > "$STATE_LOCK/pid"    # dead holder
+  run with_state_lock true
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE_LOCK" ]
 }

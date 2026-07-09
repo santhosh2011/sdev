@@ -28,7 +28,7 @@ PROJECTS_DIR="$SDEV_HOME/core/projects.d"
 # See the "state ledger" section below.
 SDEV_STATE_DIR="$SDEV_HOME/state"
 STATE_FILE="$SDEV_STATE_DIR/state.yml"
-STATE_LOCK="$SDEV_STATE_DIR/lock"          # mkdir(2) lock-dir (portable; no flock)
+STATE_LOCK="$SDEV_STATE_DIR/lock"          # atomic symlink lock; target = holder pid
 POOL_DIR="$SDEV_STATE_DIR/pool"            # relocated warm worktrees live here
 
 # Create the SDEV_HOME skeleton and seed the default config if absent. Idempotent.
@@ -304,23 +304,32 @@ _STATE_LOCK_BUSY_SECS=120   # give up waiting for a live-held lock after this (w
 # mtime epoch of a path (GNU `stat -c`, else BSD/macOS `stat -f`), or "" .
 _mtime_epoch() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true; }
 
-# Break the lock ONLY when it is genuinely abandoned:
-#   * its holder pid is recorded and that process is dead, OR
-#   * it carries no holder pid AND is older than the stale grace period (a holder
-#     SIGKILLed between mkdir and writing its pid).
-# The pid file is written atomically (mv), so a present pid file is never a
-# partial/empty read — that ambiguity used to let a waiter break a live lock.
+# Break the lock only when its holder is genuinely dead. The lock is an atomic
+# symlink whose target is the holder pid, so a waiter can read the owner the instant
+# the lock exists — there is no pid-less window for a waiter to misjudge (the race a
+# mkdir-lock-plus-later-pid-file had). The dead-lock removal is done via an atomic
+# rename so two racing waiters can never both "break" and then double-acquire.
 _state_lock_break_if_stale() {
+    if [[ -L "$STATE_LOCK" ]]; then
+        local pid; pid="$(readlink "$STATE_LOCK" 2>/dev/null || true)"; pid="${pid%%:*}"
+        [[ -n "$pid" ]] || return 0                                    # vanished mid-check — retry, never break
+        [[ "$pid" != "0" ]] && kill -0 "$pid" 2>/dev/null && return 0  # live holder — keep
+        # Confirmed dead. Break via an atomic rename so only one racing waiter wins
+        # and a re-acquired lock is never removed out from under its new owner.
+        local grave="$STATE_LOCK.stale.$BASHPID"
+        mv "$STATE_LOCK" "$grave" 2>/dev/null && rm -f "$grave" 2>/dev/null || true
+        return 0
+    fi
+    # Legacy dir lock left by an older sdev (upgrade path): break a dead/old one.
+    [[ -e "$STATE_LOCK" ]] || return 0
     local pidf="$STATE_LOCK/pid" pid mt now
     if [[ -f "$pidf" ]]; then
         pid="$(cat "$pidf" 2>/dev/null || true)"
         if [[ -n "$pid" ]]; then
-            kill -0 "$pid" 2>/dev/null && return 0      # live holder — keep
-            rm -rf "$STATE_LOCK" 2>/dev/null || true    # dead holder — break
-            return 0
+            kill -0 "$pid" 2>/dev/null && return 0
+            rm -rf "$STATE_LOCK" 2>/dev/null || true; return 0
         fi
     fi
-    # No (readable) pid yet: could be a lock mid-setup. Break only if it is old.
     mt="$(_mtime_epoch "$STATE_LOCK")"; now="$(date +%s 2>/dev/null || echo 0)"
     if [[ -n "$mt" && "$now" -ge 0 && $((now - mt)) -ge $_STATE_LOCK_STALE_SECS ]]; then
         rm -rf "$STATE_LOCK" 2>/dev/null || true
@@ -329,7 +338,7 @@ _state_lock_break_if_stale() {
 
 _state_lock_release() {
     [[ -n "$_STATE_LOCK_HELD" ]] || return 0
-    rm -rf "$STATE_LOCK" 2>/dev/null || true
+    rm -f "$STATE_LOCK" 2>/dev/null || true
     _STATE_LOCK_HELD=""
 }
 
@@ -347,7 +356,10 @@ with_state_lock() {
     # means the same thing no matter how slow each poll runs on a loaded box.
     local start now tries=0
     start="$(date +%s 2>/dev/null || echo 0)"
-    while ! mkdir "$STATE_LOCK" 2>/dev/null; do
+    while true; do
+        # Only claim when the path is truly empty: ln -s would otherwise succeed
+        # *into* a leftover directory (legacy lock) and silently break exclusion.
+        [[ ! -e "$STATE_LOCK" && ! -L "$STATE_LOCK" ]] && ln -s "$$" "$STATE_LOCK" 2>/dev/null && break
         _state_lock_break_if_stale
         now="$(date +%s 2>/dev/null || echo 0)"
         [[ "$start" -gt 0 && $((now - start)) -ge $_STATE_LOCK_BUSY_SECS ]] \
@@ -360,10 +372,7 @@ with_state_lock() {
     done
     _STATE_LOCK_HELD="$STATE_LOCK"
     trap '_state_lock_release' EXIT              # arm release BEFORE anything can fail
-    # Atomic pid write: readers see either no file or the complete pid, never a
-    # half-written/empty one.
-    printf '%s\n' "$$" > "$STATE_LOCK/pid.$$.tmp" 2>/dev/null \
-        && mv -f "$STATE_LOCK/pid.$$.tmp" "$STATE_LOCK/pid" 2>/dev/null || true
+    # No pid write needed: the symlink target already names this holder ($$).
     local rc=0
     "$@" || rc=$?
     _state_lock_release

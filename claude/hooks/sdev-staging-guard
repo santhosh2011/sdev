@@ -40,8 +40,12 @@ find_task_dir() {
 if td="$(find_task_dir "$cwd")"; then
   profile="$(grep '^APP_ENV=' "$td/.env" | head -1 | cut -d= -f2 || true)"
 fi
-# An explicit staging token in the command also trips the guard.
-printf '%s' "$cmd" | grep -Eqw 'staging' && profile="staging"
+# Catch an explicit staging selection on the command line, since the task dir may
+# not be the cwd yet. Matching only --env staging / APP_ENV=staging (not a bare
+# mention) keeps unrelated commands — e.g. a commit message — from being blocked.
+printf '%s' "$cmd" | grep -Eq -- \
+  '(^|[[:space:]])--env[[:space:]=]+staging([[:space:]]|$)|(^|[[:space:]])APP_ENV=staging([[:space:]]|$)' \
+  && profile="staging"
 
 [[ "$profile" == "staging" ]] || allow
 
