@@ -23,7 +23,7 @@ make_fixture() {
     cp "$REPO_BIN"/_lib.sh "$REPO_BIN"/sdev "$REPO_BIN"/new-task \
        "$REPO_BIN"/list-tasks "$REPO_BIN"/end-task "$REPO_BIN"/migrate \
        "$REPO_BIN"/init "$REPO_BIN"/edit-project "$REPO_BIN"/doctor \
-       "$REPO_BIN"/prune "$REPO_BIN"/status "$REPO_BIN"/start "$WORKSPACE_ROOT/bin/"
+       "$REPO_BIN"/prune "$REPO_BIN"/status "$REPO_BIN"/start "$REPO_BIN"/review "$WORKSPACE_ROOT/bin/"
     cp -R "$REPO_BIN/templates" "$WORKSPACE_ROOT/bin/templates"
     # Ship the Claude hook scripts into the fixture so $SDEV_INSTALL/claude/hooks
     # resolves (SDEV_INSTALL = parent of bin = $WORKSPACE_ROOT).
