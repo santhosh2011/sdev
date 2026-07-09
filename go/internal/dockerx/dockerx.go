@@ -25,3 +25,19 @@ func RunningByComposeProject(composeProject string) int {
 	}
 	return len(strings.Split(trimmed, "\n"))
 }
+
+// Volumes returns all docker volume names, or nil on any error (docker missing,
+// daemon down).
+func Volumes() []string {
+	out, err := exec.Command("docker", "volume", "ls", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	return names
+}

@@ -23,6 +23,8 @@ func Run(args []string) int {
 		return Status(rest)
 	case "ps":
 		return PS(rest)
+	case "ls", "list":
+		return LS(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2
