@@ -30,7 +30,7 @@ jobs:
           shellcheck -x -S warning \
             bin/sdev bin/_lib.sh bin/init bin/new-task bin/end-task \
             bin/edit-project bin/list-tasks bin/migrate bin/doctor bin/prune \
-            bin/status bin/start bin/ship \
+            bin/status bin/start bin/review bin/ship \
             install install.sh self-update dist bootstrap
 
   test:
