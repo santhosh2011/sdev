@@ -104,6 +104,16 @@ if ! is_reserved "$CMD"; then
     exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
 fi
 
+# Exec a ported subcommand through the Go binary when it is built, else the bash
+# implementation (strangler migration: works with no Go toolchain installed).
+run_ported() {   # $1=go subcommand, $2=bash fallback script, rest=args
+    local sub="$1" fallback="$2"; shift 2
+    if [[ -x "$SCRIPT_DIR/sdev-go" ]]; then
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/sdev-go" "$sub" "$@"
+    fi
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/$fallback" "$@"
+}
+
 case "$CMD" in
     help|-h|--help)
         usage
@@ -210,7 +220,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
         ;;
     status)
-        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/status" "$@"
+        run_ported status status "$@"
         ;;
     up)
         slug=""; profile_flag=""; assume_yes=0

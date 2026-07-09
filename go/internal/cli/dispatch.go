@@ -19,6 +19,8 @@ func Run(args []string) int {
 	switch sub {
 	case "version":
 		return Version(rest)
+	case "status":
+		return Status(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2
