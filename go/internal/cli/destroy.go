@@ -9,7 +9,6 @@ import (
 	"github.com/santhosh2011/sdev/internal/config"
 	"github.com/santhosh2011/sdev/internal/fsutil"
 	"github.com/santhosh2011/sdev/internal/paths"
-	"github.com/santhosh2011/sdev/internal/proc"
 	"github.com/santhosh2011/sdev/internal/state"
 	"github.com/santhosh2011/sdev/internal/teardown"
 )
@@ -80,27 +79,6 @@ func resolveDestroyKey(home, project, slug string) (string, bool) {
 		return slug, true
 	}
 	return "", false
-}
-
-// reservationLive reports whether key holds a live lease or a live process-lock -
-// the two states that block an unforced destroy. A stale lock (dead pid) blocks
-// neither. Mirrors _task_reservation_state in bin/_lib.sh.
-func reservationLive(home, key string) (leased, locked bool) {
-	l, err := state.Load(state.FilePath(home))
-	if err != nil {
-		return false, false
-	}
-	t, ok := l.Tasks[key]
-	if !ok {
-		return false, false
-	}
-	if t.Lease {
-		return true, false
-	}
-	if t.Pid != 0 && proc.Alive(t.Pid, t.ProcToken) {
-		return false, true
-	}
-	return false, false
 }
 
 // teardownOps wires the real docker and git side effects for teardown.Force. Both

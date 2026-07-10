@@ -37,6 +37,8 @@ func Run(args []string) int {
 		return Hold(rest)
 	case "destroy":
 		return Destroy(rest)
+	case "prune":
+		return Prune(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2

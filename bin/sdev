@@ -169,6 +169,7 @@ case "$CMD" in
         log "destroyed $key (worktree + offset + ledger entry removed)"
         ;;
     prune)
+        try_go prune "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
         ;;
     lease)
