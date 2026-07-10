@@ -311,13 +311,28 @@ _mtime_epoch() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || t
 # rename so two racing waiters can never both "break" and then double-acquire.
 _state_lock_break_if_stale() {
     if [[ -L "$STATE_LOCK" ]]; then
-        local pid; pid="$(readlink "$STATE_LOCK" 2>/dev/null || true)"; pid="${pid%%:*}"
-        [[ -n "$pid" ]] || return 0                                    # vanished mid-check — retry, never break
-        [[ "$pid" != "0" ]] && kill -0 "$pid" 2>/dev/null && return 0  # live holder — keep
-        # Confirmed dead. Break via an atomic rename so only one racing waiter wins
-        # and a re-acquired lock is never removed out from under its new owner.
-        local grave="$STATE_LOCK.stale.$BASHPID"
-        mv "$STATE_LOCK" "$grave" 2>/dev/null && rm -f "$grave" 2>/dev/null || true
+        local tgt pid; tgt="$(readlink "$STATE_LOCK" 2>/dev/null || true)"; pid="${tgt%%:*}"
+        [[ -n "$pid" && "$pid" != "0" ]] || return 0                   # unknown target — keep, never break
+        kill -0 "$pid" 2>/dev/null && return 0                         # live holder — keep
+        # Re-read: a genuine handoff (prior holder released, new one acquired)
+        # shows a DIFFERENT target on the second read, so back off; only the SAME
+        # dead target read twice is a truly abandoned lock. This closes the
+        # check-vs-reacquire race that a single stale read would open.
+        local tgt2 pid2; tgt2="$(readlink "$STATE_LOCK" 2>/dev/null || true)"; pid2="${tgt2%%:*}"
+        [[ "$tgt2" == "$tgt" && -n "$pid2" && "$pid2" != "0" ]] || return 0
+        kill -0 "$pid2" 2>/dev/null && return 0
+        # Confirmed abandoned. Claim atomically, then discard only if it is still
+        # the exact lock we confirmed; else restore via ln -s (never clobbers a
+        # newer holder).
+        local grave="$STATE_LOCK.stale.$BASHPID" ctgt
+        mv "$STATE_LOCK" "$grave" 2>/dev/null || return 0
+        ctgt="$(readlink "$grave" 2>/dev/null || true)"
+        if [[ "$ctgt" == "$tgt" ]]; then
+            rm -f "$grave" 2>/dev/null || true                         # broke exactly the abandoned lock
+        else
+            ln -s "$ctgt" "$STATE_LOCK" 2>/dev/null || true            # grabbed a newer lock — restore
+            rm -f "$grave" 2>/dev/null || true
+        fi
         return 0
     fi
     # Legacy dir lock left by an older sdev (upgrade path): break a dead/old one.
@@ -373,8 +388,17 @@ with_state_lock() {
     _STATE_LOCK_HELD="$STATE_LOCK"
     trap '_state_lock_release' EXIT              # arm release BEFORE anything can fail
     # No pid write needed: the symlink target already names this holder ($$).
+    # Gated concurrency self-check: an O_EXCL HOLDER marker atomically detects a
+    # second holder inside the critical section (the lock-interop test asserts no
+    # DOUBLEHOLD lines). Zero cost when SDEV_LOCK_TRACE is unset.
+    if [[ -n "${SDEV_LOCK_TRACE:-}" ]]; then
+        if ( set -o noclobber; printf 'bash:%s' "$BASHPID" > "$SDEV_STATE_DIR/HOLDER" ) 2>/dev/null; then :; else
+            printf 'DOUBLEHOLD bash:%s saw %s\n' "$BASHPID" "$(cat "$SDEV_STATE_DIR/HOLDER" 2>/dev/null)" >> "$SDEV_LOCK_TRACE"
+        fi
+    fi
     local rc=0
     "$@" || rc=$?
+    [[ -n "${SDEV_LOCK_TRACE:-}" ]] && rm -f "$SDEV_STATE_DIR/HOLDER"
     _state_lock_release
     trap - EXIT
     return "$rc"

@@ -104,6 +104,21 @@ if ! is_reserved "$CMD"; then
     exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
 fi
 
+# If the Go binary is built, exec it for this subcommand (never returns); else
+# return so the caller's bash fallback runs. Strangler seam: the tool keeps
+# working with no Go toolchain installed.
+try_go() {   # $1=go subcommand, rest=args
+    [[ -x "$SCRIPT_DIR/sdev-go" ]] || return 0
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/sdev-go" "$@"
+}
+
+# Exec a ported subcommand: the Go binary when built, else a bash fallback script.
+run_ported() {   # $1=go subcommand, $2=bash fallback script, rest=args
+    local sub="$1" fallback="$2"; shift 2
+    try_go "$sub" "$@"
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/$fallback" "$@"
+}
+
 case "$CMD" in
     help|-h|--help)
         usage
@@ -156,6 +171,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
         ;;
     lease)
+        try_go lease "$@"
         slug="${1:-}"; shift || true
         holder="${1:-${SDEV_LEASE_HOLDER:-}}"
         dir="$(require_task_dir "$slug")"
@@ -164,6 +180,7 @@ case "$CMD" in
         log "leased $key${holder:+ to $holder} (durable — not auto-reclaimed until 'sdev release')"
         ;;
     release)
+        try_go release "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         key="$(task_key_for_dir "$dir")"
@@ -171,6 +188,7 @@ case "$CMD" in
         log "released $key (lease + process-lock cleared)"
         ;;
     hold)
+        try_go hold "$@"
         slug=""; pid=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -188,7 +206,7 @@ case "$CMD" in
         log "process-lock on $key held by pid $pid (self-heals when it exits)"
         ;;
     doctor)
-        exec "$SCRIPT_DIR/doctor"
+        run_ported doctor doctor "$@"
         ;;
     init)
         exec "$SCRIPT_DIR/init"
@@ -207,10 +225,10 @@ case "$CMD" in
         ;;
     ls|list)
         # shellcheck disable=SC2086
-        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/list-tasks" ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
+        run_ported ls list-tasks ${PROJECT_FLAG:+--project "$PROJECT_FLAG"} "$@"
         ;;
     status)
-        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/status" "$@"
+        run_ported status status "$@"
         ;;
     up)
         slug=""; profile_flag=""; assume_yes=0
@@ -266,6 +284,7 @@ case "$CMD" in
         exec ./compose down -v --remove-orphans
         ;;
     ps)
+        try_go ps "$@"
         json=0; slug=""; extra=()
         while [[ $# -gt 0 ]]; do
             case "$1" in
