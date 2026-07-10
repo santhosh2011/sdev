@@ -143,6 +143,7 @@ case "$CMD" in
         # ledger entry. No archive, no pool, no pre-flight. Refuses a task with a
         # live lease or live process-lock unless --force. Also handles a
         # workspace-less entry (e.g. a lease whose worktree is already gone).
+        try_go destroy "$@"
         slug=""; force=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
