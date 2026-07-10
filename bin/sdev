@@ -171,6 +171,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
         ;;
     lease)
+        try_go lease "$@"
         slug="${1:-}"; shift || true
         holder="${1:-${SDEV_LEASE_HOLDER:-}}"
         dir="$(require_task_dir "$slug")"
@@ -179,6 +180,7 @@ case "$CMD" in
         log "leased $key${holder:+ to $holder} (durable — not auto-reclaimed until 'sdev release')"
         ;;
     release)
+        try_go release "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         key="$(task_key_for_dir "$dir")"
@@ -186,6 +188,7 @@ case "$CMD" in
         log "released $key (lease + process-lock cleared)"
         ;;
     hold)
+        try_go hold "$@"
         slug=""; pid=""
         while [[ $# -gt 0 ]]; do
             case "$1" in

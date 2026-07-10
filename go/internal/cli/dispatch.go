@@ -29,6 +29,12 @@ func Run(args []string) int {
 		return Doctor(rest)
 	case "alloc":
 		return Alloc(rest)
+	case "lease":
+		return Lease(rest)
+	case "release":
+		return Release(rest)
+	case "hold":
+		return Hold(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2
