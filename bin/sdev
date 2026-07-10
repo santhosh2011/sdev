@@ -27,6 +27,11 @@ set -- "${ARGS[@]:-}"
 
 usage() {
     cat <<EOF
+sdev - run many isolated, parallel dev workspaces side by side. Each task is a git
+       worktree + its own docker stack on unique ports, so you (or a fleet of agents)
+       work on many branches at once without collisions. Grouped by project;
+       one command creates a task, boots it, and gives you a URL.
+
 Usage: sdev [-p <project>] <command> [args…]
        sdev <slug>                # shorthand for: sdev new <slug>
 

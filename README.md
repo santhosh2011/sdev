@@ -1,8 +1,10 @@
 # sdev
 
-A small CLI for running many **isolated, parallel docker-compose workspaces** — grouped by **project**. Each task gets its own git worktrees, its own env profile, and its own stack on a unique set of host ports, so you can develop several features (and several projects) at once without anything colliding.
+Run many **isolated, parallel dev environments** side by side. Each **task** is a real git worktree plus its own running docker stack on a unique set of host ports, so you - or a fleet of agents - can work on a dozen branches at once without them colliding on ports, branches, or state.
 
-Driving sdev from an agent (firstmate, or any orchestrator)? See the machine-readable [agent API](docs/agent-api.md): every read/lifecycle command takes `--json`, and the `start → review → ship` loop is scriptable end to end.
+One command creates a task, boots its full stack, and hands you a URL. Tasks are grouped by **project**, their ports are reserved through a lock-protected state ledger, and they're cheap to re-create via a warm worktree pool - so parallel development scales from one person to a crew of agents.
+
+Driving sdev from an agent (firstmate, or any orchestrator)? See the machine-readable [agent API](docs/agent-api.md): every read/lifecycle command takes `--json`, and the `start -> review -> ship` loop is scriptable end to end.
 
 ## Concepts
 
