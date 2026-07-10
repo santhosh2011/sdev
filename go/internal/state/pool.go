@@ -14,3 +14,20 @@ func DropPool(home, path string) error {
 		l.Pool = kept
 	})
 }
+
+// TakePool removes and returns the path of the first warm-pool entry whose
+// Source matches, or "" if none. Mirrors _pool_take_locked; the caller holds the
+// state lock.
+func TakePool(home, source string) (string, error) {
+	var taken string
+	err := mutate(home, func(l *Ledger) {
+		for i, e := range l.Pool {
+			if e.Source == source {
+				taken = e.Path
+				l.Pool = append(l.Pool[:i], l.Pool[i+1:]...)
+				return
+			}
+		}
+	})
+	return taken, err
+}

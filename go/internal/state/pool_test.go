@@ -31,6 +31,40 @@ func TestDropPoolNoopWhenPathAbsent(t *testing.T) {
 	}
 }
 
+func TestTakePoolPopsFirstMatchingSource(t *testing.T) {
+	home := t.TempDir()
+	seedPool(t, home,
+		PoolEntry{Source: "/src/a", Path: "/pool/a1"},
+		PoolEntry{Source: "/src/b", Path: "/pool/b1"},
+		PoolEntry{Source: "/src/a", Path: "/pool/a2"},
+	)
+
+	got, err := TakePool(home, "/src/a")
+	if err != nil {
+		t.Fatalf("TakePool: %v", err)
+	}
+	if got != "/pool/a1" {
+		t.Fatalf("TakePool = %q, want /pool/a1", got)
+	}
+	l, _ := Load(FilePath(home))
+	if len(l.Pool) != 2 {
+		t.Fatalf("pool len = %d, want 2 after take", len(l.Pool))
+	}
+}
+
+func TestTakePoolEmptyWhenNoMatch(t *testing.T) {
+	home := t.TempDir()
+	seedPool(t, home, PoolEntry{Source: "/src/a", Path: "/pool/a1"})
+
+	got, err := TakePool(home, "/src/zzz")
+	if err != nil {
+		t.Fatalf("TakePool: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("TakePool = %q, want empty", got)
+	}
+}
+
 func seedPool(t *testing.T, home string, entries ...PoolEntry) {
 	t.Helper()
 	if err := Init(home); err != nil {

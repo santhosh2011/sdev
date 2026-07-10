@@ -99,11 +99,6 @@ fi
 CMD="$1"; shift
 PROJECT="$(resolve_project "$PROJECT_FLAG")"
 
-# If first arg isn't a reserved keyword, treat as implicit `new <slug>`.
-if ! is_reserved "$CMD"; then
-    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
-fi
-
 # If the Go binary is built, exec it for this subcommand (never returns); else
 # return so the caller's bash fallback runs. Strangler seam: the tool keeps
 # working with no Go toolchain installed.
@@ -119,11 +114,18 @@ run_ported() {   # $1=go subcommand, $2=bash fallback script, rest=args
     exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/$fallback" "$@"
 }
 
+# If first arg isn't a reserved keyword, treat as implicit `new <slug>`.
+if ! is_reserved "$CMD"; then
+    try_go new "$CMD" "$@"
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
+fi
+
 case "$CMD" in
     help|-h|--help)
         usage
         ;;
     new)
+        try_go new "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$@"
         ;;
     start)
