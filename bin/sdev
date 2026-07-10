@@ -129,6 +129,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$@"
         ;;
     start)
+        try_go start "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/start" "$@"
         ;;
     review)

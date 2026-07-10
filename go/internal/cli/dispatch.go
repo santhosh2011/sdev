@@ -43,6 +43,8 @@ func Run(args []string) int {
 		return Newtask(rest)
 	case "end":
 		return End(rest)
+	case "start":
+		return Start(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2
