@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/santhosh2011/sdev/internal/dockerx"
 	"github.com/santhosh2011/sdev/internal/envfile"
+	"github.com/santhosh2011/sdev/internal/fsutil"
 	"github.com/santhosh2011/sdev/internal/jsonout"
 	"github.com/santhosh2011/sdev/internal/paths"
 )
@@ -19,8 +18,34 @@ import (
 // legacyDefaultProject is the implicit project a legacy flat task belongs to.
 const legacyDefaultProject = "default"
 
+// On-disk layout segments used by the ls walkers.
+const (
+	projectsRoot    = "projects"
+	archiveDirName  = "_archive"
+	envFile         = ".env"
+	archiveInfoFile = "ARCHIVE_INFO.md"
+)
+
 // VolumeLister lists docker volume names; injected for hermetic tests.
 type VolumeLister func() []string
+
+// aliveTask is a live task discovered on disk, before output formatting. The
+// JSON and human `ls` paths both derive their rows from this, so the on-disk
+// walk lives in one place.
+type aliveTask struct {
+	Key     string // ledger key: "<project>/<slug>" or a legacy "<name>"
+	Label   string // display label: Key, or "<name> (legacy)" for a flat task
+	Offset  int
+	Nginx   int
+	Running int
+}
+
+// archivedTask is an archived task discovered on disk.
+type archivedTask struct {
+	Key   string
+	Label string
+	Date  string
+}
 
 // LS implements `sdev ls [--project <p>] [--json]`: a machine-readable report
 // with --json, else the human listing.
@@ -44,29 +69,33 @@ func LS(args []string) int {
 		printLSHuman(home, scope)
 		return 0
 	}
-
-	report := BuildLSReport(home, scope, dockerx.RunningByComposeProject, dockerx.Volumes)
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
-		fmt.Fprintf(os.Stderr, "sdev ls: %v\n", err)
-		return 1
-	}
-	return 0
+	return writeJSON("sdev ls", BuildLSReport(home, scope, dockerx.RunningByComposeProject, dockerx.Volumes))
 }
 
 // BuildLSReport lists alive + archived tasks and orphan volumes. An empty scope
 // lists all projects (report.Project is null); a non-empty scope narrows the
 // alive tasks to that project (archived tasks are never scoped).
 func BuildLSReport(home, scope string, running RunningCounter, volumes VolumeLister) jsonout.LSReport {
-	alive := walkAlive(home, scope, running)
-	archived := walkArchived(home)
-	orphans := findOrphans(home, volumes)
-
+	alive := make([]jsonout.LSAlive, 0)
 	runningTotal := 0
-	for _, a := range alive {
+	for _, a := range collectAlive(home, scope, running) {
+		alive = append(alive, jsonout.LSAlive{
+			Task:      a.Key,
+			Offset:    a.Offset,
+			NginxPort: a.Nginx,
+			URL:       localhostURL(a.Nginx),
+			Running:   a.Running,
+			Status:    statusJSON(a.Running),
+		})
 		runningTotal += a.Running
 	}
+
+	archived := make([]jsonout.LSArchived, 0)
+	for _, a := range collectArchived(home) {
+		archived = append(archived, jsonout.LSArchived{Task: a.Key, Archived: a.Date})
+	}
+
+	orphans := findOrphans(home, volumes)
 
 	var project *string
 	if scope != "" {
@@ -86,79 +115,104 @@ func BuildLSReport(home, scope string, running RunningCounter, volumes VolumeLis
 	}
 }
 
-func walkAlive(home, scope string, running RunningCounter) []jsonout.LSAlive {
-	alive := []jsonout.LSAlive{}
-	projectsDir := filepath.Join(home, "projects")
+// collectAlive walks projects/ once (in shell-glob order) and returns the live
+// tasks, applying the scope filter. Legacy flat tasks belong to "default".
+func collectAlive(home, scope string, running RunningCounter) []aliveTask {
+	tasks := []aliveTask{}
+	projectsDir := filepath.Join(home, projectsRoot)
 	for _, name := range sortedDirNames(projectsDir) {
-		if name == "_archive" {
+		if name == archiveDirName {
 			continue
 		}
-		// Legacy flat task: projects/<name>/.env (implicit "default" project).
-		flatEnv := filepath.Join(projectsDir, name, ".env")
-		if fileExists(flatEnv) {
+		if flatEnv := filepath.Join(projectsDir, name, envFile); fsutil.FileExists(flatEnv) {
 			if scope != "" && scope != legacyDefaultProject {
 				continue
 			}
-			alive = append(alive, aliveEntry(name, flatEnv, running))
+			tasks = append(tasks, newAliveTask(name, name+" (legacy)", flatEnv, running))
 			continue
 		}
-		// Namespaced project dir.
 		if scope != "" && scope != name {
 			continue
 		}
 		projDir := filepath.Join(projectsDir, name)
 		for _, slug := range sortedDirNames(projDir) {
-			env := filepath.Join(projDir, slug, ".env")
-			if fileExists(env) {
-				alive = append(alive, aliveEntry(name+"/"+slug, env, running))
+			env := filepath.Join(projDir, slug, envFile)
+			if fsutil.FileExists(env) {
+				key := name + "/" + slug
+				tasks = append(tasks, newAliveTask(key, key, env, running))
 			}
 		}
 	}
-	return alive
+	return tasks
 }
 
-func aliveEntry(taskName, envPath string, running RunningCounter) jsonout.LSAlive {
-	nginxPort := atoiOrZero(envfile.Value(envPath, "NGINX_HOST_PORT"))
-	offset := atoiOrZero(envfile.Value(envPath, "PORT_OFFSET"))
+func newAliveTask(key, label, envPath string, running RunningCounter) aliveTask {
 	compose := envfile.Value(envPath, "COMPOSE_PROJECT_NAME")
 	if compose == "" {
-		compose = taskName
+		compose = key
 	}
-	run := running(compose)
-	status := "stopped"
-	if run > 0 {
-		status = "running"
-	}
-	url := ""
-	if nginxPort > 0 {
-		url = "http://localhost:" + strconv.Itoa(nginxPort) + "/"
-	}
-	return jsonout.LSAlive{
-		Task:      taskName,
-		Offset:    offset,
-		NginxPort: nginxPort,
-		URL:       url,
-		Running:   run,
-		Status:    status,
+	return aliveTask{
+		Key:     key,
+		Label:   label,
+		Offset:  atoiOrZero(envfile.Value(envPath, "PORT_OFFSET")),
+		Nginx:   atoiOrZero(envfile.Value(envPath, "NGINX_HOST_PORT")),
+		Running: running(compose),
 	}
 }
 
-func walkArchived(home string) []jsonout.LSArchived {
-	archived := []jsonout.LSArchived{}
-	archiveDir := filepath.Join(home, "projects", "_archive")
+// collectArchived walks projects/_archive/ once and returns the archived tasks.
+func collectArchived(home string) []archivedTask {
+	tasks := []archivedTask{}
+	archiveDir := filepath.Join(home, projectsRoot, archiveDirName)
 	for _, name := range sortedDirNames(archiveDir) {
-		// Legacy flat archive: _archive/<name>/ARCHIVE_INFO.md.
-		if info := filepath.Join(archiveDir, name, "ARCHIVE_INFO.md"); fileExists(info) {
-			archived = append(archived, jsonout.LSArchived{Task: name, Archived: archiveDate(info)})
+		if info := filepath.Join(archiveDir, name, archiveInfoFile); fsutil.FileExists(info) {
+			tasks = append(tasks, archivedTask{Key: name, Label: name + " (legacy)", Date: archiveDate(info)})
 			continue
 		}
 		projDir := filepath.Join(archiveDir, name)
 		for _, slug := range sortedDirNames(projDir) {
-			info := filepath.Join(projDir, slug, "ARCHIVE_INFO.md")
-			archived = append(archived, jsonout.LSArchived{Task: name + "/" + slug, Archived: archiveDate(info)})
+			key := name + "/" + slug
+			info := filepath.Join(projDir, slug, archiveInfoFile)
+			tasks = append(tasks, archivedTask{Key: key, Label: key, Date: archiveDate(info)})
 		}
 	}
-	return archived
+	return tasks
+}
+
+func findOrphans(home string, volumes VolumeLister) []string {
+	orphans := []string{}
+	known := knownProjectNames(home)
+	for _, vol := range volumes() {
+		project := vol
+		if i := strings.Index(vol, "_"); i >= 0 {
+			project = vol[:i]
+		}
+		if !known[project] {
+			orphans = append(orphans, vol)
+		}
+	}
+	return orphans
+}
+
+// knownProjectNames is the set of live + archived project dir names (minus the
+// _archive container itself), used to tell orphan volumes from live ones.
+func knownProjectNames(home string) map[string]bool {
+	known := map[string]bool{}
+	for _, dir := range []string{
+		filepath.Join(home, projectsRoot),
+		filepath.Join(home, projectsRoot, archiveDirName),
+	} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Name() != archiveDirName {
+				known[e.Name()] = true
+			}
+		}
+	}
+	return known
 }
 
 // sortedDirNames returns the immediate subdirectory names of dir in shell-glob
@@ -182,44 +236,6 @@ func sortedDirNames(dir string) []string {
 	return names
 }
 
-func findOrphans(home string, volumes VolumeLister) []string {
-	orphans := []string{}
-	known := knownProjectNames(home)
-	for _, vol := range volumes() {
-		project := vol
-		if i := strings.Index(vol, "_"); i >= 0 {
-			project = vol[:i]
-		}
-		if !known[project] {
-			orphans = append(orphans, vol)
-		}
-	}
-	return orphans
-}
-
-// knownProjectNames is the set of live + archived project dir names (minus the
-// _archive container itself), used to tell orphan volumes from live ones.
-func knownProjectNames(home string) map[string]bool {
-	known := map[string]bool{}
-	dirs := []string{
-		filepath.Join(home, "projects"),
-		filepath.Join(home, "projects", "_archive"),
-	}
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.Name() == "_archive" {
-				continue
-			}
-			known[e.Name()] = true
-		}
-	}
-	return known
-}
-
 // archiveDate reads the "- archive_date:" line from an ARCHIVE_INFO.md, or "".
 func archiveDate(infoPath string) string {
 	f, err := os.Open(infoPath)
@@ -229,13 +245,27 @@ func archiveDate(infoPath string) string {
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "- archive_date:") {
+		if line := scanner.Text(); strings.HasPrefix(line, "- archive_date:") {
 			_, after, _ := strings.Cut(line, ":")
 			return strings.TrimSpace(after)
 		}
 	}
 	return ""
+}
+
+// localhostURL is the task URL for an nginx host port, or "" when unset.
+func localhostURL(port int) string {
+	if port <= 0 {
+		return ""
+	}
+	return "http://localhost:" + strconv.Itoa(port) + "/"
+}
+
+func statusJSON(running int) string {
+	if running > 0 {
+		return "running"
+	}
+	return "stopped"
 }
 
 func atoiOrZero(s string) int {
@@ -244,9 +274,4 @@ func atoiOrZero(s string) int {
 		return 0
 	}
 	return n
-}
-
-func fileExists(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && !fi.IsDir()
 }

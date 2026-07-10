@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/santhosh2011/sdev/internal/envfile"
+	"github.com/santhosh2011/sdev/internal/fsutil"
 )
 
 // Init creates the ledger skeleton (and pool dir) if absent. Idempotent.
@@ -60,10 +61,19 @@ func Save(home string, l *Ledger) error {
 	return os.Rename(name, FilePath(home))
 }
 
-// AllocateOffset reserves the first free port offset (multiple of step) for key
-// and records it, after running the full seed + reconcile cycle. The caller
-// MUST hold the state lock. Mirrors _allocate_offset_locked in bin/_lib.sh.
-func AllocateOffset(home, key string, lease bool, holder string, ephemeral bool, step int, alive ProcAlive) (int, error) {
+// Reservation is the intent recorded when allocating an offset: the task key
+// plus its optional durable lease / ephemeral flags.
+type Reservation struct {
+	Key       string
+	Lease     bool
+	Holder    string
+	Ephemeral bool
+}
+
+// AllocateOffset reserves the first free port offset (multiple of step) for the
+// reservation and records it, after running the full seed + reconcile cycle. The
+// caller MUST hold the state lock. Mirrors _allocate_offset_locked in bin/_lib.sh.
+func AllocateOffset(home string, r Reservation, step int, alive ProcAlive) (int, error) {
 	if err := Init(home); err != nil {
 		return 0, err
 	}
@@ -79,12 +89,12 @@ func AllocateOffset(home, key string, lease bool, holder string, ephemeral bool,
 	for used[candidate] {
 		candidate += step
 	}
-	l.Tasks[key] = Task{
+	l.Tasks[r.Key] = Task{
 		Offset:      candidate,
 		CreatedAt:   nowUTC(),
-		Lease:       lease,
-		LeaseHolder: holder,
-		Ephemeral:   ephemeral,
+		Lease:       r.Lease,
+		LeaseHolder: r.Holder,
+		Ephemeral:   r.Ephemeral,
 	}
 	if err := Save(home, l); err != nil {
 		return 0, err
@@ -111,12 +121,12 @@ func seedFromEnv(home string, l *Ledger) {
 	if l.Seeded {
 		return
 	}
-	for _, env := range liveEnvPaths(home) {
+	for _, env := range LiveEnvPaths(home) {
 		off := envOffset(env)
 		if off < 0 {
 			continue
 		}
-		key := keyFromEnv(home, env)
+		key := KeyFromEnv(home, env)
 		if key == "" {
 			continue
 		}
@@ -131,7 +141,7 @@ func seedFromEnv(home string, l *Ledger) {
 // live-locked - freeing their offsets. This is the self-heal.
 func reconcile(home string, l *Ledger, alive ProcAlive) {
 	for key, t := range l.Tasks {
-		if isDir(filepath.Join(home, "projects", key)) {
+		if fsutil.IsDir(filepath.Join(home, projectsDir, key)) {
 			continue // workspace present - keep
 		}
 		if t.Lease {
@@ -151,7 +161,7 @@ func usedOffsets(home string, l *Ledger) map[int]bool {
 	for _, t := range l.Tasks {
 		used[t.Offset] = true
 	}
-	for _, env := range liveEnvPaths(home) {
+	for _, env := range LiveEnvPaths(home) {
 		if off := envOffset(env); off >= 0 {
 			used[off] = true
 		}
@@ -159,24 +169,31 @@ func usedOffsets(home string, l *Ledger) map[int]bool {
 	return used
 }
 
-// liveEnvPaths lists task .env files under projects/, excluding _archive.
-func liveEnvPaths(home string) []string {
-	root := filepath.Join(home, "projects")
+// LiveEnvPaths lists task .env files under projects/, excluding _archive.
+func LiveEnvPaths(home string) []string {
+	root := filepath.Join(home, projectsDir)
 	var envs []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && d.Name() == "_archive" {
+		if d.IsDir() && d.Name() == archiveName {
 			return filepath.SkipDir
 		}
-		if !d.IsDir() && d.Name() == ".env" {
+		if !d.IsDir() && d.Name() == envFileName {
 			envs = append(envs, path)
 		}
 		return nil
 	})
 	sort.Strings(envs)
 	return envs
+}
+
+// KeyFromEnv derives a ledger key ("<project>/<slug>" or a legacy "<slug>") from
+// a task .env path, mirroring _state_key_from_env in bin/_lib.sh.
+func KeyFromEnv(home, envPath string) string {
+	rel := strings.TrimPrefix(envPath, filepath.Join(home, projectsDir)+string(filepath.Separator))
+	return strings.TrimSuffix(rel, string(filepath.Separator)+envFileName)
 }
 
 func envOffset(envPath string) int {
@@ -191,16 +208,6 @@ func envOffset(envPath string) int {
 	return n
 }
 
-func keyFromEnv(home, envPath string) string {
-	rel := strings.TrimPrefix(envPath, filepath.Join(home, "projects")+string(filepath.Separator))
-	return strings.TrimSuffix(rel, string(filepath.Separator)+".env")
-}
-
 func nowUTC() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }

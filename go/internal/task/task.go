@@ -5,9 +5,10 @@ package task
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/santhosh2011/sdev/internal/fsutil"
 )
 
 // Resolve returns the workspace dir for slug in project: the namespaced
@@ -17,11 +18,11 @@ func Resolve(home, project, slug string) (string, error) {
 		return "", errors.New("slug required")
 	}
 	namespaced := filepath.Join(home, "projects", project, slug)
-	if isDir(namespaced) {
+	if fsutil.IsDir(namespaced) {
 		return namespaced, nil
 	}
 	flat := filepath.Join(home, "projects", slug)
-	if isDir(flat) {
+	if fsutil.IsDir(flat) {
 		return flat, nil
 	}
 	return "", fmt.Errorf("task %q not found in project %q (or legacy projects/%s)", slug, project, slug)
@@ -31,9 +32,4 @@ func Resolve(home, project, slug string) (string, error) {
 // projects/ ("<project>/<slug>" or a legacy "<slug>").
 func Key(home, dir string) string {
 	return strings.TrimPrefix(dir, filepath.Join(home, "projects")+string(filepath.Separator))
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }

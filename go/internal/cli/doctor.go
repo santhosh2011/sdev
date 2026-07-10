@@ -2,10 +2,8 @@ package cli
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -13,10 +11,14 @@ import (
 	"syscall"
 
 	"github.com/santhosh2011/sdev/internal/envfile"
+	"github.com/santhosh2011/sdev/internal/fsutil"
 	"github.com/santhosh2011/sdev/internal/paths"
 	"github.com/santhosh2011/sdev/internal/proc"
 	"github.com/santhosh2011/sdev/internal/state"
 )
+
+// wOK is the write-permission mode for syscall.Access.
+const wOK = 0x02
 
 // Doctor implements `sdev doctor`: read-only diagnostics for sdev's environment
 // and central ledger. Exits non-zero if any FAIL is reported (WARNs are fine).
@@ -46,12 +48,20 @@ func Doctor(_ []string) int {
 	return 0
 }
 
+// ANSI colors for the doctor status prefixes.
+const (
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorRed    = "\033[31m"
+	colorReset  = "\033[0m"
+)
+
 type doctorRun struct{ failed bool }
 
-func (d *doctorRun) pass(msg string) { fmt.Printf("  \033[32mok\033[0m   %s\n", msg) }
-func (d *doctorRun) warn(msg string) { fmt.Printf("  \033[33mwarn\033[0m %s\n", msg) }
+func (d *doctorRun) pass(msg string) { fmt.Printf("  %sok%s   %s\n", colorGreen, colorReset, msg) }
+func (d *doctorRun) warn(msg string) { fmt.Printf("  %swarn%s %s\n", colorYellow, colorReset, msg) }
 func (d *doctorRun) fail(msg string) {
-	fmt.Printf("  \033[31mFAIL\033[0m %s\n", msg)
+	fmt.Printf("  %sFAIL%s %s\n", colorRed, colorReset, msg)
 	d.failed = true
 }
 
@@ -112,7 +122,7 @@ func (d *doctorRun) checkJq() {
 }
 
 func (d *doctorRun) checkPaths(home string) {
-	if isDirPath(home) {
+	if fsutil.IsDir(home) {
 		d.pass("SDEV_HOME=" + home)
 	} else {
 		d.warn("SDEV_HOME=" + home + " does not exist yet (run 'sdev init')")
@@ -126,7 +136,7 @@ func (d *doctorRun) checkPaths(home string) {
 
 func (d *doctorRun) checkLedger(home string) {
 	stateFile := state.FilePath(home)
-	if !fileExists(stateFile) {
+	if !fsutil.FileExists(stateFile) {
 		d.warn("no ledger yet at " + stateFile + " (created on first 'sdev new')")
 		return
 	}
@@ -172,12 +182,12 @@ func (d *doctorRun) checkLock(home string) {
 
 func (d *doctorRun) checkOffsetDrift(home string, ledger *state.Ledger) {
 	drift := false
-	for _, e := range liveEnvFiles(home) {
+	for _, e := range state.LiveEnvPaths(home) {
 		off := envfile.Value(e, "PORT_OFFSET")
 		if off == "" {
 			continue
 		}
-		key := stateKeyFromEnv(home, e)
+		key := state.KeyFromEnv(home, e)
 		t, ok := ledger.Tasks[key]
 		if !ok {
 			d.warn(fmt.Sprintf("task '%s' (offset %s on disk) is missing from the ledger - will be adopted on next allocation", key, off))
@@ -210,7 +220,7 @@ func (d *doctorRun) checkDuplicateOffsets(ledger *state.Ledger) {
 func (d *doctorRun) checkPool(ledger *state.Ledger) {
 	bad := false
 	for _, p := range ledger.Pool {
-		if p.Path != "" && !isDirPath(p.Path) {
+		if p.Path != "" && !fsutil.IsDir(p.Path) {
 			d.warn("pool entry missing on disk: " + p.Path + " (prune with 'sdev end' bookkeeping or edit the ledger)")
 			bad = true
 		}
@@ -236,41 +246,9 @@ func duplicateOffsets(l *state.Ledger) []int {
 	return dupes
 }
 
-// liveEnvFiles lists task .env paths under projects/, excluding _archive.
-func liveEnvFiles(home string) []string {
-	root := filepath.Join(home, "projects")
-	var envs []string
-	_ = filepath.WalkDir(root, func(path string, dd fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if dd.IsDir() && dd.Name() == "_archive" {
-			return filepath.SkipDir
-		}
-		if !dd.IsDir() && dd.Name() == ".env" {
-			envs = append(envs, path)
-		}
-		return nil
-	})
-	sort.Strings(envs)
-	return envs
-}
-
-// stateKeyFromEnv derives a ledger key ("<project>/<slug>" or "<slug>") from a
-// task .env path, mirroring _state_key_from_env in bin/_lib.sh.
-func stateKeyFromEnv(home, envPath string) string {
-	rel := strings.TrimPrefix(envPath, filepath.Join(home, "projects")+string(filepath.Separator))
-	return strings.TrimSuffix(rel, string(filepath.Separator)+".env")
-}
-
-func isDirPath(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
-}
-
 func writable(p string) bool {
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return true
 	}
-	return syscall.Access(p, 0x2) == nil // W_OK
+	return syscall.Access(p, wOK) == nil
 }

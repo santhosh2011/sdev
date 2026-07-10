@@ -90,8 +90,8 @@ func Hold(args []string) int {
 	if code != 0 {
 		return code
 	}
-	token := proc.Token(pid)
-	if err := lock.With(state.Dir(home), func() error { return state.SetLock(home, key, pid, token) }); err != nil {
+	procLock := state.ProcLock{Pid: pid, Token: proc.Token(pid)}
+	if err := lock.With(state.Dir(home), func() error { return state.SetLock(home, key, procLock) }); err != nil {
 		return failErr(err)
 	}
 	logf("process-lock on %s held by pid %d (self-heals when it exits)", key, pid)

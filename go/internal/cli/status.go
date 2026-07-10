@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,13 +36,7 @@ func Status(args []string) int {
 	}
 
 	if jsonOut {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil {
-			fmt.Fprintf(os.Stderr, "sdev status: %v\n", err)
-			return 1
-		}
-		return 0
+		return writeJSON("sdev status", report)
 	}
 	printStatusHuman(report)
 	return 0

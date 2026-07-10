@@ -14,14 +14,20 @@ func SetLease(home, key, holder string) error {
 	})
 }
 
-// SetLock records a process-lock (pid + start-time token) on key, creating a
-// bare entry if needed. The caller holds the lock.
-func SetLock(home, key string, pid int, token string) error {
+// ProcLock identifies a process-lock: the holder pid and its start-time token.
+type ProcLock struct {
+	Pid   int
+	Token string
+}
+
+// SetLock records a process-lock on key, creating a bare entry if needed. The
+// caller holds the lock.
+func SetLock(home, key string, lock ProcLock) error {
 	return mutate(home, func(l *Ledger) {
 		ensureEntry(home, l, key)
 		t := l.Tasks[key]
-		t.Pid = pid
-		t.ProcToken = token
+		t.Pid = lock.Pid
+		t.ProcToken = lock.Token
 		l.Tasks[key] = t
 	})
 }

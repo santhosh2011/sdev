@@ -21,6 +21,15 @@ const (
 	busyDeadline = 120 * time.Second
 	// staleGrace: a pid-less legacy lock older than this is force-broken.
 	staleGrace = 10 * time.Second
+
+	// Ramped backoff: cheap spins first (the common uncontended release), then
+	// longer sleeps under contention so the holder's work is not starved. This
+	// ramp is load-bearing (see AGENTS.md "Locking").
+	backoffFastTries   = 10
+	backoffMediumTries = 50
+	backoffFast        = 10 * time.Millisecond
+	backoffMedium      = 50 * time.Millisecond
+	backoffSlow        = 200 * time.Millisecond
 )
 
 // With acquires the state lock in stateDir, runs fn, and releases it even if fn
@@ -60,12 +69,12 @@ func acquire(lockPath string) error {
 		}
 		tries++
 		switch {
-		case tries < 10:
-			time.Sleep(10 * time.Millisecond) // fast path: uncontended release
-		case tries < 50:
-			time.Sleep(50 * time.Millisecond)
+		case tries < backoffFastTries:
+			time.Sleep(backoffFast)
+		case tries < backoffMediumTries:
+			time.Sleep(backoffMedium)
 		default:
-			time.Sleep(200 * time.Millisecond) // heavy contention: let the holder run
+			time.Sleep(backoffSlow)
 		}
 	}
 }
@@ -151,42 +160,5 @@ func breakLegacyLock(lockPath string, fi os.FileInfo) {
 	}
 	if time.Since(fi.ModTime()) >= staleGrace {
 		_ = os.RemoveAll(lockPath)
-	}
-}
-
-// traceEnter/traceExit are a gated concurrency self-check: when SDEV_LOCK_TRACE
-// is set, an O_EXCL HOLDER marker atomically detects a second holder inside the
-// critical section and appends a DOUBLEHOLD line. Zero cost (one getenv) when
-// unset; the lock-interop test enables it to assert mutual exclusion.
-func traceEnter(stateDir string) {
-	if os.Getenv("SDEV_LOCK_TRACE") == "" {
-		return
-	}
-	holder := filepath.Join(stateDir, "HOLDER")
-	id := fmt.Sprintf("go:%d", os.Getpid())
-	if f, err := os.OpenFile(holder, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
-		existing, _ := os.ReadFile(holder)
-		appendTrace(fmt.Sprintf("DOUBLEHOLD %s saw %s", id, string(existing)))
-	} else {
-		fmt.Fprint(f, id)
-		f.Close()
-	}
-}
-
-func traceExit(stateDir string) {
-	if os.Getenv("SDEV_LOCK_TRACE") == "" {
-		return
-	}
-	os.Remove(filepath.Join(stateDir, "HOLDER"))
-}
-
-func appendTrace(line string) {
-	path := os.Getenv("SDEV_LOCK_TRACE")
-	if path == "" {
-		return
-	}
-	if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-		fmt.Fprintln(f, line)
-		f.Close()
 	}
 }

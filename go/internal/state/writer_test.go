@@ -14,7 +14,7 @@ func TestAllocateOffsetFreshReturnsStep(t *testing.T) {
 	home := t.TempDir()
 	mkTaskDir(t, home, "widget/a")
 
-	off, err := AllocateOffset(home, "widget/a", false, "", false, 10, alwaysDead)
+	off, err := AllocateOffset(home, Reservation{Key: "widget/a"}, 10, alwaysDead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestAllocateOffsetSeedsFromExistingEnv(t *testing.T) {
 	writeEnvOffset(t, home, "widget/y", 20)
 	mkTaskDir(t, home, "widget/z")
 
-	off, err := AllocateOffset(home, "widget/z", false, "", false, 10, alwaysDead)
+	off, err := AllocateOffset(home, Reservation{Key: "widget/z"}, 10, alwaysDead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestAllocateOffsetLeaseKeepsReservation(t *testing.T) {
 	seedLedger(t, home, "widget/held", Task{Offset: 10, Lease: true, LeaseHolder: "bg"})
 	mkTaskDir(t, home, "widget/new")
 
-	off, err := AllocateOffset(home, "widget/new", false, "", false, 10, alwaysDead)
+	off, err := AllocateOffset(home, Reservation{Key: "widget/new"}, 10, alwaysDead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestAllocateOffsetDeadLockReclaimed(t *testing.T) {
 	seedLedger(t, home, "widget/dead", Task{Offset: 10, Pid: 999999, ProcToken: "gone"})
 	mkTaskDir(t, home, "widget/new")
 
-	off, err := AllocateOffset(home, "widget/new", false, "", false, 10, alwaysDead)
+	off, err := AllocateOffset(home, Reservation{Key: "widget/new"}, 10, alwaysDead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestAllocateOffsetLiveLockKept(t *testing.T) {
 	seedLedger(t, home, "widget/live", Task{Offset: 10, Pid: 4242, ProcToken: "tok"})
 	mkTaskDir(t, home, "widget/new")
 
-	off, err := AllocateOffset(home, "widget/new", false, "", false, 10, alwaysAlive)
+	off, err := AllocateOffset(home, Reservation{Key: "widget/new"}, 10, alwaysAlive)
 	if err != nil {
 		t.Fatal(err)
 	}

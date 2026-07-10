@@ -44,8 +44,9 @@ func Alloc(args []string) int {
 	home := paths.Home()
 	step := config.PortStep(home)
 	offset := 0
+	reservation := state.Reservation{Key: key, Lease: lease, Holder: holder, Ephemeral: ephemeral}
 	err := lock.With(state.Dir(home), func() error {
-		o, e := state.AllocateOffset(home, key, lease, holder, ephemeral, step, proc.Alive)
+		o, e := state.AllocateOffset(home, reservation, step, proc.Alive)
 		offset = o
 		return e
 	})

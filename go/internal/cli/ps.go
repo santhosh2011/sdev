@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -45,10 +44,7 @@ func PS(args []string) int {
 }
 
 func psJSON(home, dir string) int {
-	url := ""
-	if port := envfile.Value(filepath.Join(dir, ".env"), "NGINX_HOST_PORT"); port != "" {
-		url = "http://localhost:" + port + "/"
-	}
+	url := localhostURL(atoiOrZero(envfile.Value(filepath.Join(dir, ".env"), "NGINX_HOST_PORT")))
 
 	cmd := exec.Command("./compose", "ps", "--format", "json")
 	cmd.Dir = dir
@@ -59,13 +55,7 @@ func psJSON(home, dir string) int {
 		URL:      url,
 		Services: compose.ParsePS(out),
 	}
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
-		fmt.Fprintf(os.Stderr, "sdev ps: %v\n", err)
-		return 1
-	}
-	return 0
+	return writeJSON("sdev ps", report)
 }
 
 func psHuman(dir string, extra []string) int {

@@ -35,28 +35,41 @@ pool:
     returned_at: "2026-07-03T00:00:00Z"
 `
 
-func TestLoadParsesTasksAndPool(t *testing.T) {
-	l, err := Load(writeLedger(t, sampleLedger))
+func TestLoadCountsTasksPoolAndSeq(t *testing.T) {
+	l := mustLoad(t, sampleLedger)
+
+	if l.PoolSeq != 3 || len(l.Tasks) != 2 || len(l.Pool) != 1 {
+		t.Fatalf("PoolSeq=%d Tasks=%d Pool=%d, want 3/2/1", l.PoolSeq, len(l.Tasks), len(l.Pool))
+	}
+}
+
+func TestLoadParsesLeasedTask(t *testing.T) {
+	b := mustLoad(t, sampleLedger).Tasks["acme/b"]
+
+	if b.Offset != 20 || !b.Lease || b.LeaseHolder != "nightowl" {
+		t.Fatalf("acme/b = %+v, want offset 20 leased by nightowl", b)
+	}
+}
+
+func TestLoadParsesEphemeralLockAndPool(t *testing.T) {
+	l := mustLoad(t, sampleLedger)
+
+	c := l.Tasks["acme/c"]
+	if c.Pid != 4242 || !c.Ephemeral {
+		t.Fatalf("acme/c = %+v, want pid 4242 ephemeral", c)
+	}
+	if l.Pool[0].Path != "/pool/acme/api.1" {
+		t.Fatalf("Pool[0].Path = %q", l.Pool[0].Path)
+	}
+}
+
+func mustLoad(t *testing.T, body string) *Ledger {
+	t.Helper()
+	l, err := Load(writeLedger(t, body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.PoolSeq != 3 {
-		t.Fatalf("PoolSeq = %d, want 3", l.PoolSeq)
-	}
-	if len(l.Tasks) != 2 {
-		t.Fatalf("len(Tasks) = %d, want 2", len(l.Tasks))
-	}
-	b := l.Tasks["acme/b"]
-	if b.Offset != 20 || !b.Lease || b.LeaseHolder != "nightowl" {
-		t.Fatalf("acme/b = %+v", b)
-	}
-	c := l.Tasks["acme/c"]
-	if c.Pid != 4242 || !c.Ephemeral {
-		t.Fatalf("acme/c = %+v", c)
-	}
-	if len(l.Pool) != 1 || l.Pool[0].Path != "/pool/acme/api.1" {
-		t.Fatalf("Pool = %+v", l.Pool)
-	}
+	return l
 }
 
 func TestLoadMissingFileYieldsEmpty(t *testing.T) {

@@ -20,7 +20,7 @@ func TestSetLockRecordsPidAndToken(t *testing.T) {
 	home := t.TempDir()
 	seedLedger(t, home, "widget/a", Task{Offset: 10})
 
-	if err := SetLock(home, "widget/a", 4242, "tok"); err != nil {
+	if err := SetLock(home, "widget/a", ProcLock{Pid: 4242, Token: "tok"}); err != nil {
 		t.Fatal(err)
 	}
 	tk := loadTask(t, home, "widget/a")

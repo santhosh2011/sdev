@@ -3,17 +3,23 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh2011/sdev/internal/dockerx"
-	"github.com/santhosh2011/sdev/internal/envfile"
+	"github.com/santhosh2011/sdev/internal/fsutil"
 	"github.com/santhosh2011/sdev/internal/proc"
 	"github.com/santhosh2011/sdev/internal/state"
 )
 
+// aliveRowFmt renders one alive-task line: label, offset, nginx URL, status, and
+// an optional reservation annotation.
+const aliveRowFmt = "  %-28s offset=%-3s nginx=http://localhost:%-5s [%s]%s\n"
+
 // printLSHuman renders the human `sdev ls` listing: alive tasks, workspace-less
-// leases, the warm pool, archived tasks, and orphan volumes. It reads the ledger
-// for reservation annotations and pool/lease state.
+// leases, the warm pool, archived tasks, and orphan volumes. It reuses the same
+// on-disk walkers as the --json path and layers the ledger-derived detail
+// (reservation labels, leases, pool) on top.
 func printLSHuman(home, scope string) {
 	ledger, err := state.Load(state.FilePath(home))
 	if err != nil {
@@ -21,7 +27,11 @@ func printLSHuman(home, scope string) {
 	}
 
 	fmt.Println("=== Alive tasks ===")
-	if !printAliveHuman(home, scope, ledger) {
+	alive := collectAlive(home, scope, dockerx.RunningByComposeProject)
+	for _, a := range alive {
+		printTaskHuman(a, ledger)
+	}
+	if len(alive) == 0 {
 		fmt.Println("  (none)")
 	}
 	printLeasesHuman(home, scope, ledger)
@@ -34,77 +44,37 @@ func printLSHuman(home, scope string) {
 
 	fmt.Println()
 	fmt.Println("=== Archived tasks ===")
-	if !printArchivedHuman(home) {
+	archived := collectArchived(home)
+	for _, a := range archived {
+		fmt.Printf("  %-28s archived %s\n", a.Label, dashIfEmpty(a.Date))
+	}
+	if len(archived) == 0 {
 		fmt.Println("  (none)")
 	}
 
 	fmt.Println()
 	fmt.Println("=== Orphan docker volumes ===")
-	if !printOrphansHuman(home) {
+	orphans := findOrphans(home, dockerx.Volumes)
+	for _, vol := range orphans {
+		fmt.Println("  " + vol)
+	}
+	if len(orphans) == 0 {
 		fmt.Println("  (none)")
 	}
 }
 
-func printAliveHuman(home, scope string, ledger *state.Ledger) bool {
-	found := false
-	projectsDir := filepath.Join(home, "projects")
-	for _, name := range sortedDirNames(projectsDir) {
-		if name == "_archive" {
-			continue
-		}
-		flatEnv := filepath.Join(projectsDir, name, ".env")
-		if fileExists(flatEnv) {
-			if scope != "" && scope != legacyDefaultProject {
-				continue
-			}
-			printTaskHuman(name+" (legacy)", flatEnv, name, ledger)
-			found = true
-			continue
-		}
-		if scope != "" && scope != name {
-			continue
-		}
-		for _, slug := range sortedDirNames(filepath.Join(projectsDir, name)) {
-			env := filepath.Join(projectsDir, name, slug, ".env")
-			if fileExists(env) {
-				key := name + "/" + slug
-				printTaskHuman(key, env, key, ledger)
-				found = true
-			}
-		}
-	}
-	return found
-}
-
-func printTaskHuman(label, envPath, key string, ledger *state.Ledger) {
-	nginxPort := envfile.Value(envPath, "NGINX_HOST_PORT")
-	if nginxPort == "" {
-		nginxPort = "-"
-	}
-	offset := envfile.Value(envPath, "PORT_OFFSET")
-	if offset == "" {
-		offset = "-"
-	}
-	compose := envfile.Value(envPath, "COMPOSE_PROJECT_NAME")
-	if compose == "" {
-		compose = label
-	}
-	status := "stopped"
-	if running := dockerx.RunningByComposeProject(compose); running > 0 {
-		status = fmt.Sprintf("running (%d containers)", running)
-	}
+func printTaskHuman(a aliveTask, ledger *state.Ledger) {
 	suffix := ""
-	if resv := taskLabel(ledger, key); resv != "" {
+	if resv := taskLabel(ledger, a.Key); resv != "" {
 		suffix = " [" + resv + "]"
 	}
-	fmt.Printf("  %-28s offset=%-3s nginx=http://localhost:%-5s [%s]%s\n",
-		label, offset, nginxPort, status, suffix)
+	fmt.Printf(aliveRowFmt, a.Label, dashIfZero(a.Offset), dashIfZero(a.Nginx), statusHuman(a.Running), suffix)
 }
 
 func printLeasesHuman(home, scope string, ledger *state.Ledger) {
 	shown := false
 	for _, key := range ledger.LeasedKeys() {
-		if isDirPath(filepath.Join(home, "projects", key)) {
+		if fsutil.IsDir(filepath.Join(home, projectsRoot, key)) {
 			continue // already listed among alive tasks
 		}
 		if scope != "" && key != scope && !strings.HasPrefix(key, scope+"/") {
@@ -122,60 +92,15 @@ func printLeasesHuman(home, scope string, ledger *state.Ledger) {
 func printPoolHuman(scope string, ledger *state.Ledger) bool {
 	found := false
 	for _, p := range ledger.Pool {
-		if p.Path == "" {
-			continue
-		}
-		if scope != "" && p.Project != scope {
+		if p.Path == "" || (scope != "" && p.Project != scope) {
 			continue
 		}
 		found = true
 		status := "ok"
-		if !isDirPath(p.Path) {
+		if !fsutil.IsDir(p.Path) {
 			status = "MISSING"
 		}
 		fmt.Printf("  %-28s %s [%s]\n", p.Project+"/"+p.Repo, p.Path, status)
-	}
-	return found
-}
-
-func printArchivedHuman(home string) bool {
-	found := false
-	archiveDir := filepath.Join(home, "projects", "_archive")
-	for _, name := range sortedDirNames(archiveDir) {
-		if info := filepath.Join(archiveDir, name, "ARCHIVE_INFO.md"); fileExists(info) {
-			printArchivedLine(name+" (legacy)", info)
-			found = true
-			continue
-		}
-		for _, slug := range sortedDirNames(filepath.Join(archiveDir, name)) {
-			info := filepath.Join(archiveDir, name, slug, "ARCHIVE_INFO.md")
-			printArchivedLine(name+"/"+slug, info)
-			found = true
-		}
-	}
-	return found
-}
-
-func printArchivedLine(label, infoPath string) {
-	date := archiveDate(infoPath)
-	if date == "" {
-		date = "-"
-	}
-	fmt.Printf("  %-28s archived %s\n", label, date)
-}
-
-func printOrphansHuman(home string) bool {
-	known := knownProjectNames(home)
-	found := false
-	for _, vol := range dockerx.Volumes() {
-		project := vol
-		if i := strings.Index(vol, "_"); i >= 0 {
-			project = vol[:i]
-		}
-		if !known[project] {
-			fmt.Println("  " + vol)
-			found = true
-		}
 	}
 	return found
 }
@@ -188,4 +113,25 @@ func taskLabel(ledger *state.Ledger, key string) string {
 		return ""
 	}
 	return t.StatusLabel(proc.Alive)
+}
+
+func statusHuman(running int) string {
+	if running > 0 {
+		return fmt.Sprintf("running (%d containers)", running)
+	}
+	return "stopped"
+}
+
+func dashIfZero(n int) string {
+	if n == 0 {
+		return "-"
+	}
+	return strconv.Itoa(n)
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

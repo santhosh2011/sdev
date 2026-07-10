@@ -77,12 +77,5 @@ func writeProjectFile(t *testing.T, home, name string) {
 
 func writeTaskEnv(t *testing.T, home, project, slug string) {
 	t.Helper()
-	dir := filepath.Join(home, "projects", project, slug)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := "PORT_OFFSET=10\nNGINX_HOST_PORT=8090\nCOMPOSE_PROJECT_NAME=" + project + "_" + slug + "\n"
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeTaskEnvPort(t, home, project, slug, 8090)
 }
