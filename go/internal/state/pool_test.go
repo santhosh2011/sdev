@@ -1,6 +1,9 @@
 package state
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDropPoolRemovesEntryByPath(t *testing.T) {
 	home := t.TempDir()
@@ -62,6 +65,40 @@ func TestTakePoolEmptyWhenNoMatch(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("TakePool = %q, want empty", got)
+	}
+}
+
+func TestReservePoolSlotIncrementsSeq(t *testing.T) {
+	home := t.TempDir()
+	if err := Init(home); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := ReservePoolSlot(home, "widget", "svc")
+	if err != nil {
+		t.Fatalf("ReservePoolSlot: %v", err)
+	}
+	second, _ := ReservePoolSlot(home, "widget", "svc")
+	if first != filepath.Join(PoolDir(home), "widget", "svc.1") {
+		t.Fatalf("first slot = %q", first)
+	}
+	if second != filepath.Join(PoolDir(home), "widget", "svc.2") {
+		t.Fatalf("second slot = %q, want seq 2", second)
+	}
+}
+
+func TestRecordPoolAppendsEntryWithTimestamp(t *testing.T) {
+	home := t.TempDir()
+	if err := Init(home); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RecordPool(home, PoolEntry{Project: "widget", Repo: "api", Path: "/pool/x"}); err != nil {
+		t.Fatalf("RecordPool: %v", err)
+	}
+	l, _ := Load(FilePath(home))
+	if len(l.Pool) != 1 || l.Pool[0].Path != "/pool/x" || l.Pool[0].ReturnedAt == "" {
+		t.Fatalf("pool = %+v, want one stamped entry", l.Pool)
 	}
 }
 

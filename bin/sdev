@@ -138,6 +138,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/ship" "$@"
         ;;
     end)
+        try_go end "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
         ;;
     destroy)

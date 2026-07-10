@@ -1,5 +1,33 @@
 package state
 
+import (
+	"fmt"
+	"path/filepath"
+)
+
+// ReservePoolSlot bumps the monotonic pool sequence and returns the destination
+// path for a returned worktree: state/pool/<project>/<repoPath>.<seq>. Mirrors
+// _pool_reserve_slot_locked; the caller holds the state lock.
+func ReservePoolSlot(home, project, repoPath string) (string, error) {
+	var slot string
+	err := mutate(home, func(l *Ledger) {
+		l.PoolSeq++
+		slot = filepath.Join(PoolDir(home), project, fmt.Sprintf("%s.%d", repoPath, l.PoolSeq))
+	})
+	return slot, err
+}
+
+// RecordPool appends a warm-pool entry, stamping ReturnedAt when unset. Mirrors
+// _pool_record_locked; the caller holds the state lock.
+func RecordPool(home string, e PoolEntry) error {
+	if e.ReturnedAt == "" {
+		e.ReturnedAt = nowUTC()
+	}
+	return mutate(home, func(l *Ledger) {
+		l.Pool = append(l.Pool, e)
+	})
+}
+
 // DropPool removes every warm-pool entry whose Path equals path, keeping the
 // rest. A path with no matching entry is a no-op. Mirrors _pool_drop_locked in
 // bin/_lib.sh; the caller holds the state lock.
