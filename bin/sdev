@@ -237,6 +237,7 @@ case "$CMD" in
         run_ported status status "$@"
         ;;
     up)
+        try_go up "$@"
         slug=""; profile_flag=""; assume_yes=0
         extra=()
         while [[ $# -gt 0 ]]; do
@@ -278,12 +279,14 @@ case "$CMD" in
         exec ./compose up -d "${extra[@]}"
         ;;
     down)
+        try_go down "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         cd "$dir"
         exec ./compose down "$@"
         ;;
     nuke)
+        try_go nuke "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         cd "$dir"
@@ -318,6 +321,7 @@ case "$CMD" in
         exec ./compose ps "${extra[@]}"
         ;;
     logs)
+        try_go logs "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         follow=1
@@ -337,6 +341,7 @@ case "$CMD" in
         fi
         ;;
     shell)
+        try_go shell "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         svc="${1:-$(config_shell_service "$PROJECT")}"
@@ -344,6 +349,7 @@ case "$CMD" in
         exec ./compose exec -it "$svc" sh
         ;;
     open)
+        try_go open "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         env_file="$dir/.env"
@@ -358,10 +364,12 @@ case "$CMD" in
         fi
         ;;
     cd)
+        try_go cd "$@"
         slug="${1:-}"; shift || true
         require_task_dir "$slug"
         ;;
     code)
+        try_go code "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         # Prefer $VISUAL/$EDITOR, then common editor CLIs; fall back to printing the path.

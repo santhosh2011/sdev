@@ -17,13 +17,14 @@ var validProfiles = []string{"local", "dev", "staging"}
 // projectDoc is the subset of a project/global registry that task creation reads.
 // A project file and the global .task-config.yml share enough shape to reuse it.
 type projectDoc struct {
-	ConfPrefix    string                    `yaml:"conf_prefix"`
-	Template      string                    `yaml:"template"`
-	StackServices []string                  `yaml:"stack_services"`
-	BasePorts     map[string]int            `yaml:"base_ports"`
-	Hooks         *bool                     `yaml:"hooks"`
-	Repos         map[string]map[string]any `yaml:"repos"`
-	Defaults      struct {
+	ConfPrefix          string                    `yaml:"conf_prefix"`
+	Template            string                    `yaml:"template"`
+	StackServices       []string                  `yaml:"stack_services"`
+	BasePorts           map[string]int            `yaml:"base_ports"`
+	Hooks               *bool                     `yaml:"hooks"`
+	DefaultShellService string                    `yaml:"default_shell_service"`
+	Repos               map[string]map[string]any `yaml:"repos"`
+	Defaults            struct {
 		DefaultEnv string         `yaml:"default_env"`
 		BasePorts  map[string]int `yaml:"base_ports"`
 	} `yaml:"defaults"`
@@ -85,6 +86,14 @@ func ConfPrefix(home, project string) string {
 		return p
 	}
 	return "app"
+}
+
+// ShellService returns the compose service `sdev shell` execs into, defaulting to "api".
+func ShellService(home, project string) string {
+	if s := readDoc(EffectiveProjectFile(home, project)).DefaultShellService; s != "" {
+		return s
+	}
+	return "api"
 }
 
 // DefaultEnv is the fallback environment profile: the local override config, then

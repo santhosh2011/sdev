@@ -45,6 +45,22 @@ func Run(args []string) int {
 		return End(rest)
 	case "start":
 		return Start(rest)
+	case "up":
+		return Up(rest)
+	case "down":
+		return Down(rest)
+	case "nuke":
+		return Nuke(rest)
+	case "logs":
+		return Logs(rest)
+	case "shell":
+		return Shell(rest)
+	case "open":
+		return Open(rest)
+	case "code":
+		return Code(rest)
+	case "cd":
+		return Cd(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "sdev-go: unknown subcommand %q\n", sub)
 		return 2
