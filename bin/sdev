@@ -133,9 +133,11 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/start" "$@"
         ;;
     review)
+        try_go review "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/review" "$@"
         ;;
     ship)
+        try_go ship "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/ship" "$@"
         ;;
     end)
@@ -221,6 +223,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/edit-project" "$@"
         ;;
     migrate)
+        try_go migrate "$@"
         exec "$SCRIPT_DIR/migrate" "$@"
         ;;
     update)

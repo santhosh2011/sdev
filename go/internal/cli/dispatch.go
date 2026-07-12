@@ -56,6 +56,16 @@ func dispatch(cmd string, sub []string) (int, bool) {
 		return Use(sub), true
 	case "projects":
 		return Projects(sub), true
+	case "migrate":
+		return Migrate(sub), true
+	case "review":
+		return Review(sub), true
+	case "ship":
+		return Ship(sub), true
+	case "init":
+		return Init(sub), true
+	case "edit":
+		return Edit(sub), true
 	case "status":
 		return Status(sub), true
 	case "ps":
