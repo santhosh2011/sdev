@@ -104,11 +104,6 @@ fi
 CMD="$1"; shift
 PROJECT="$(resolve_project "$PROJECT_FLAG")"
 
-# If first arg isn't a reserved keyword, treat as implicit `new <slug>`.
-if ! is_reserved "$CMD"; then
-    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
-fi
-
 # If the Go binary is built, exec it for this subcommand (never returns); else
 # return so the caller's bash fallback runs. Strangler seam: the tool keeps
 # working with no Go toolchain installed.
@@ -124,23 +119,34 @@ run_ported() {   # $1=go subcommand, $2=bash fallback script, rest=args
     exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/$fallback" "$@"
 }
 
+# If first arg isn't a reserved keyword, treat as implicit `new <slug>`.
+if ! is_reserved "$CMD"; then
+    try_go new "$CMD" "$@"
+    exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$CMD" "$@"
+fi
+
 case "$CMD" in
     help|-h|--help)
         usage
         ;;
     new)
+        try_go new "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/new-task" "$@"
         ;;
     start)
+        try_go start "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/start" "$@"
         ;;
     review)
+        try_go review "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/review" "$@"
         ;;
     ship)
+        try_go ship "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/ship" "$@"
         ;;
     end)
+        try_go end "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/end-task" "$@"
         ;;
     destroy)
@@ -148,6 +154,7 @@ case "$CMD" in
         # ledger entry. No archive, no pool, no pre-flight. Refuses a task with a
         # live lease or live process-lock unless --force. Also handles a
         # workspace-less entry (e.g. a lease whose worktree is already gone).
+        try_go destroy "$@"
         slug=""; force=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -173,6 +180,7 @@ case "$CMD" in
         log "destroyed $key (worktree + offset + ledger entry removed)"
         ;;
     prune)
+        try_go prune "$@"
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/prune" "$@"
         ;;
     lease)
@@ -220,6 +228,7 @@ case "$CMD" in
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/edit-project" "$@"
         ;;
     migrate)
+        try_go migrate "$@"
         exec "$SCRIPT_DIR/migrate" "$@"
         ;;
     update)
@@ -236,6 +245,7 @@ case "$CMD" in
         run_ported status status "$@"
         ;;
     up)
+        try_go up "$@"
         slug=""; profile_flag=""; assume_yes=0
         extra=()
         while [[ $# -gt 0 ]]; do
@@ -277,12 +287,14 @@ case "$CMD" in
         exec ./compose up -d "${extra[@]}"
         ;;
     down)
+        try_go down "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         cd "$dir"
         exec ./compose down "$@"
         ;;
     nuke)
+        try_go nuke "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         cd "$dir"
@@ -317,6 +329,7 @@ case "$CMD" in
         exec ./compose ps "${extra[@]}"
         ;;
     logs)
+        try_go logs "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         follow=1
@@ -336,6 +349,7 @@ case "$CMD" in
         fi
         ;;
     shell)
+        try_go shell "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         svc="${1:-$(config_shell_service "$PROJECT")}"
@@ -343,6 +357,7 @@ case "$CMD" in
         exec ./compose exec -it "$svc" sh
         ;;
     open)
+        try_go open "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         env_file="$dir/.env"
@@ -357,10 +372,12 @@ case "$CMD" in
         fi
         ;;
     cd)
+        try_go cd "$@"
         slug="${1:-}"; shift || true
         require_task_dir "$slug"
         ;;
     code)
+        try_go code "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
         # Prefer $VISUAL/$EDITOR, then common editor CLIs; fall back to printing the path.
@@ -380,6 +397,7 @@ case "$CMD" in
         fi
         ;;
     use)
+        try_go use "$@"
         target="${1:-}"
         if [[ -z "$target" ]]; then
             cur="$(resolve_project "")"
@@ -392,6 +410,7 @@ case "$CMD" in
         log "pinned project '$target' for this terminal"
         ;;
     projects)
+        try_go projects "$@"
         printf "%-16s %-8s %-8s\n" PROJECT TASKS RUNNING
         for p in $(config_projects); do
             n=0

@@ -34,6 +34,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      # dist cross-compiles the native sdev binaries into the zip; without Go it
+      # would ship the bash runtime only.
       - name: Build distributable zip
         id: build
         run: |

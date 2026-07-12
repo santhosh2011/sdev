@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Strangler seam: the Go binary owns `edit` when built; else the bash menu runs.
+[[ -x "$SCRIPT_DIR/sdev-go" ]] && exec "$SCRIPT_DIR/sdev-go" edit "$@"
+
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
 ensure_home
