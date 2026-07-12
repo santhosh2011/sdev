@@ -26,7 +26,9 @@ if command -v go >/dev/null 2>&1 && [[ -d "$REPO_DIR/go" ]]; then
     for pair in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
         goos="${pair%/*}"; goarch="${pair#*/}"
         ( cd "$REPO_DIR/go" && GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-            go build -trimpath -ldflags "-s -w" -o "$PKG/bin/sdev-$goos-$goarch" ./cmd/sdev )
+            go build -trimpath \
+              -ldflags "-s -w -X github.com/santhosh2011/sdev/internal/cli.version=$VERSION" \
+              -o "$PKG/bin/sdev-$goos-$goarch" ./cmd/sdev )
     done
 fi
 cp "$REPO_DIR/install" "$PKG/install"

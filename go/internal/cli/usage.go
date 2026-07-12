@@ -38,8 +38,11 @@ Commands:
   init                            interactive wizard to configure your first project
   edit [<project>] [--delete-source]   add/remove repos, edit conf/shell/stack
   migrate --from <dir>            move an old in-repo sdev layout into $SDEV_HOME
+  setup hooks                     inject the fleet dashboard into agent sessions
   update                          fetch the latest release and reinstall in place
-  help | -h | --help              show this help`
+  help | -h | --help              show this help
+
+Run sdev with no args for the fleet dashboard.`
 
 func usage() {
 	fmt.Println(usageText)
