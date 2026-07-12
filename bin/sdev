@@ -389,6 +389,7 @@ case "$CMD" in
         fi
         ;;
     use)
+        try_go use "$@"
         target="${1:-}"
         if [[ -z "$target" ]]; then
             cur="$(resolve_project "")"
@@ -401,6 +402,7 @@ case "$CMD" in
         log "pinned project '$target' for this terminal"
         ;;
     projects)
+        try_go projects "$@"
         printf "%-16s %-8s %-8s\n" PROJECT TASKS RUNNING
         for p in $(config_projects); do
             n=0

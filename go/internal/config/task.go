@@ -25,8 +25,9 @@ type projectDoc struct {
 	DefaultShellService string                    `yaml:"default_shell_service"`
 	Repos               map[string]map[string]any `yaml:"repos"`
 	Defaults            struct {
-		DefaultEnv string         `yaml:"default_env"`
-		BasePorts  map[string]int `yaml:"base_ports"`
+		DefaultEnv     string         `yaml:"default_env"`
+		DefaultProject string         `yaml:"default_project"`
+		BasePorts      map[string]int `yaml:"base_ports"`
 	} `yaml:"defaults"`
 }
 
