@@ -2,10 +2,11 @@ package cli
 
 import "testing"
 
-func TestRunNoArgsPrintsUsage(t *testing.T) {
+func TestRunNoArgsShowsDashboard(t *testing.T) {
 	t.Setenv("SDEV_HOME", t.TempDir())
+	// No args is the axi dashboard now (exit 0); `sdev help` prints full usage.
 	if got := Run(nil); got != 0 {
-		t.Fatalf("Run(nil) = %d, want 0 (usage)", got)
+		t.Fatalf("Run(nil) = %d, want 0 (dashboard)", got)
 	}
 }
 

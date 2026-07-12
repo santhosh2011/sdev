@@ -24,8 +24,7 @@ func Run(args []string) int {
 	_ = os.Setenv("SDEV_PROJECT", project)
 
 	if len(rest) == 0 {
-		usage()
-		return 0
+		return Dashboard(nil) // no-arg axi surface; `sdev help` prints full usage
 	}
 	cmd, sub := rest[0], rest[1:]
 
@@ -68,6 +67,8 @@ func dispatch(cmd string, sub []string) (int, bool) {
 		return Edit(sub), true
 	case "update":
 		return Update(sub), true
+	case "setup":
+		return Setup(sub), true
 	case "status":
 		return Status(sub), true
 	case "ps":
