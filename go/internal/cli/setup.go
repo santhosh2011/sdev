@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Setup implements `sdev setup <target>`: wire sdev into agent tooling. Today it
@@ -28,6 +29,7 @@ func setupHooks() int {
 	if err != nil || bin == "" {
 		bin = "sdev"
 	}
+	command := bin + " axi-hook" // emits the dashboard as a SessionStart envelope
 	settingsPath := filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")
 
 	settings := map[string]any{}
@@ -41,16 +43,13 @@ func setupHooks() int {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	sessionStart, _ := hooks["SessionStart"].([]any)
-
-	if hookCommandPresent(sessionStart, bin) {
-		logf("sdev SessionStart hook already installed in %s", settingsPath)
-		return 0
-	}
+	// Drop any prior sdev hook (incl. an older bare-`sdev` one) so re-running
+	// normalizes to the current command instead of duplicating.
+	sessionStart := dropSdevHooks(hooks["SessionStart"], bin)
 
 	hooks["SessionStart"] = append(sessionStart, map[string]any{
 		"matcher": "startup|resume",
-		"hooks":   []any{map[string]any{"type": "command", "command": bin}},
+		"hooks":   []any{map[string]any{"type": "command", "command": command}},
 	})
 	settings["hooks"] = hooks
 
@@ -68,16 +67,28 @@ func setupHooks() int {
 	return 0
 }
 
-// hookCommandPresent reports whether any SessionStart entry already runs command.
-func hookCommandPresent(sessionStart []any, command string) bool {
-	for _, entry := range sessionStart {
-		m, _ := entry.(map[string]any)
-		inner, _ := m["hooks"].([]any)
-		for _, h := range inner {
-			hm, _ := h.(map[string]any)
-			if cmd, _ := hm["command"].(string); cmd == command {
-				return true
-			}
+// dropSdevHooks returns the SessionStart entries with any sdev-owned entry
+// removed - one whose command is the sdev binary, with or without a subcommand.
+func dropSdevHooks(raw any, bin string) []any {
+	entries, _ := raw.([]any)
+	kept := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		if entryRunsSdev(entry, bin) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
+func entryRunsSdev(entry any, bin string) bool {
+	m, _ := entry.(map[string]any)
+	inner, _ := m["hooks"].([]any)
+	for _, h := range inner {
+		hm, _ := h.(map[string]any)
+		cmd, _ := hm["command"].(string)
+		if cmd == bin || strings.HasPrefix(cmd, bin+" ") {
+			return true
 		}
 	}
 	return false

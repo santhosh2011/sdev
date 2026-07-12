@@ -69,6 +69,8 @@ func dispatch(cmd string, sub []string) (int, bool) {
 		return Update(sub), true
 	case "setup":
 		return Setup(sub), true
+	case "axi-hook": // hidden: emits the dashboard as a SessionStart envelope
+		return SessionHook(sub), true
 	case "status":
 		return Status(sub), true
 	case "ps":

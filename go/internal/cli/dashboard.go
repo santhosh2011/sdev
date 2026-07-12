@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -27,6 +28,30 @@ func Dashboard(args []string) int {
 	}
 	bin, _ := os.Executable()
 	fmt.Print(renderDashboard(report, bin))
+	return 0
+}
+
+// SessionHook prints the fleet dashboard wrapped in a Claude Code SessionStart
+// envelope (hookSpecificOutput.additionalContext), so `sdev setup hooks` can
+// inject it as ambient context. It is the hidden `axi-hook` subcommand and is
+// not listed in usage.
+func SessionHook(args []string) int {
+	report, err := BuildStatusReport(paths.Home(), config.ActiveProject(), dockerx.RunningByComposeProject)
+	if err != nil {
+		return failErr(err)
+	}
+	bin, _ := os.Executable()
+	envelope := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "SessionStart",
+			"additionalContext": renderDashboard(report, bin),
+		},
+	}
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return failErr(err)
+	}
+	fmt.Println(string(data))
 	return 0
 }
 
