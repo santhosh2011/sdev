@@ -64,21 +64,18 @@ fi
 # shellcheck disable=SC2016  # single quotes are intentional: evaluated by the child bash
 say "✓ bash $("$BASH4" -c 'printf %s "${BASH_VERSINFO[0]}"') ($BASH4)"
 
-# --- 2. yq must be mikefarah v4, NOT the Python yq --------------------------
-if ! command -v yq >/dev/null 2>&1; then
-    warn "✗ yq (mikefarah) v4 required and not found."
-    if [ "$os" = Darwin ]; then warn "   macOS: brew install yq"
-    else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
-    exit 1
+# --- 2. yq is advisory now: the native Go binary needs none ------------------
+# yq was a runtime dep of the bash tool; the installed native binary replaces it.
+# We still note a mismatched/missing yq (it matters only to the bash fallback).
+if command -v yq >/dev/null 2>&1; then
+    yq_ver="$(yq --version 2>&1 || true)"
+    case "$yq_ver" in
+        *mikefarah*) say "✓ yq ($yq_ver)" ;;
+        *) warn "⚠️  '$yq_ver' is not mikefarah yq v4 — only matters for the legacy bash fallback." ;;
+    esac
+else
+    warn "⚠️  yq not found — only needed for the legacy bash fallback (the native binary needs none)."
 fi
-yq_ver="$(yq --version 2>&1 || true)"
-case "$yq_ver" in
-    *mikefarah*) : ;;
-    *) die "wrong yq detected ('$yq_ver'). sdev needs mikefarah yq v4, not the Python yq — see https://github.com/mikefarah/yq#install" ;;
-esac
-yq_major="$(printf '%s' "$yq_ver" | grep -oE 'version v?[0-9]+' | grep -oE '[0-9]+' | head -1)"
-[ "${yq_major:-0}" -ge 4 ] 2>/dev/null || die "yq v4+ required (found '$yq_ver'). Upgrade: brew install yq (macOS) / https://github.com/mikefarah/yq#install"
-say "✓ yq ($yq_ver)"
 
 # --- 3. small download / checksum helpers -----------------------------------
 fetch_to() {  # fetch_to <url> <dest-file>

@@ -15,6 +15,20 @@ mkdir -p "$PKG"
 
 # Tool code + top-level reference assets.
 cp -R "$REPO_DIR/bin" "$PKG/bin"
+# Don't ship a locally-built dev binary; install selects a per-platform one below.
+rm -f "$PKG/bin/sdev-go"
+
+# Cross-compile the native Go binary for each supported platform. Users get a
+# single dependency-free binary (install picks the host one); no Go toolchain is
+# needed at install time. Degrades gracefully to the bash runtime if go is absent.
+# dist prints only the zip path on stdout (tests capture it), so stay silent here.
+if command -v go >/dev/null 2>&1 && [[ -d "$REPO_DIR/go" ]]; then
+    for pair in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+        goos="${pair%/*}"; goarch="${pair#*/}"
+        ( cd "$REPO_DIR/go" && GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+            go build -trimpath -ldflags "-s -w" -o "$PKG/bin/sdev-$goos-$goarch" ./cmd/sdev )
+    done
+fi
 cp "$REPO_DIR/install" "$PKG/install"
 # Distribution helpers: the network installer + self-update engine.
 for s in install.sh self-update; do

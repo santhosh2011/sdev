@@ -66,6 +66,8 @@ func dispatch(cmd string, sub []string) (int, bool) {
 		return Init(sub), true
 	case "edit":
 		return Edit(sub), true
+	case "update":
+		return Update(sub), true
 	case "status":
 		return Status(sub), true
 	case "ps":

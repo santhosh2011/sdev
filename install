@@ -147,16 +147,15 @@ _yq_major=0
 if command -v yq >/dev/null 2>&1; then
     _yq_major="$(yq --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"; _yq_major="${_yq_major:-0}"
 fi
+# yq/jq were runtime deps of the bash tool; the native Go binary needs neither.
+# They only matter now for the (dormant) bash fallback, so they are advisory.
 if [[ "$_yq_major" -ge 4 ]]; then
     say "✓ yq ($(yq --version 2>/dev/null))"
 else
-    warn "✗ yq v4 (mikefarah/yq) required."
-    if [[ "$os" == Darwin ]]; then warn "   macOS: brew install yq"
-    else warn "   Linux: see https://github.com/mikefarah/yq#install"; fi
-    ok=0
+    warn "⚠️  yq v4 not found — only needed for the legacy bash fallback (the native binary needs none)."
 fi
 if command -v jq >/dev/null 2>&1; then say "✓ jq ($(jq --version 2>/dev/null))"; else
-    warn "⚠️  jq not found — needed for machine-readable output (sdev status/ls/ps --json), not required to install."
+    warn "⚠️  jq not found — only needed for the legacy bash fallback (the native binary needs none)."
 fi
 # docker is a RUNTIME dep (needed for 'sdev up'), not an install-time one — warn,
 # don't block. This keeps the installer usable on machines that add Docker later
@@ -194,6 +193,26 @@ else
     chmod +x "$INSTALL_DIR/claude/hooks/"* 2>/dev/null || true
     chmod +x "$INSTALL_DIR/install" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/self-update" 2>/dev/null || true
     say "✓ tool installed to $INSTALL_DIR"
+fi
+
+# --- 2b. select the native Go binary as the sdev entrypoint -----------------
+# dist ships per-platform binaries as bin/sdev-<os>-<arch>. Replace the bash
+# router with the host's native binary when one is present, so `sdev` runs with
+# no bash/yq/jq at runtime. Falls back to the bash runtime when none matches.
+host_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+host_arch="$(uname -m)"
+case "$host_arch" in
+    x86_64|amd64) host_arch=amd64 ;;
+    arm64|aarch64) host_arch=arm64 ;;
+esac
+host_bin="$INSTALL_DIR/bin/sdev-$host_os-$host_arch"
+if [[ -x "$host_bin" ]]; then
+    cp "$host_bin" "$INSTALL_DIR/bin/sdev"
+    chmod +x "$INSTALL_DIR/bin/sdev"
+    rm -f "$INSTALL_DIR/bin/sdev-"*-* 2>/dev/null || true   # drop the other platforms
+    say "✓ sdev is the native Go binary ($host_os/$host_arch) — no bash/yq/jq at runtime"
+else
+    say "✓ sdev runs via the bash runtime (no matching native binary shipped)"
 fi
 
 # --- 3. resolve the project home --------------------------------------------
