@@ -49,6 +49,7 @@ Commands:
   down <slug>                     stop the stack (docker-compose down)
   nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
   end <slug> [--pool] [flags…]    tear down + archive (or return worktree to pool)
+  core [<project>] <up|refresh|status|down>   the project's standing core-<project> stack
   destroy <slug> [--force]        force-remove a task (worktree + offset + entry; no archive)
   prune [--apply] [--pool]        reclaim ephemeral/abandoned slots; --pool drains the warm pool
   lease <slug> [holder]           durably reserve a task (survives with no process)
@@ -75,7 +76,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|start|up|down|nuke|end|review|ship|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|init|edit|migrate|update|help|-h|--help) return 0 ;;
+        new|start|up|down|nuke|end|review|ship|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|core|init|edit|migrate|update|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -226,6 +227,10 @@ case "$CMD" in
         ;;
     edit)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/edit-project" "$@"
+        ;;
+    core)
+        # Bash-only (no Go port): the standing core-<project> stack lifecycle.
+        exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/core" "$@"
         ;;
     migrate)
         try_go migrate "$@"

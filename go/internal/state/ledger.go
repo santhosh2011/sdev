@@ -33,13 +33,25 @@ type PoolEntry struct {
 	ReturnedAt string `yaml:"returned_at"`
 }
 
+// CoreStack is a project's standing "core-<project>" stack: a reserved, stable
+// port offset that tracks the base branch. bash owns the core-stack lifecycle
+// (bin/core); Go only carries this field through so a ledger write never drops
+// it, and unions its offset into the task allocator's used-set so the two blocks
+// never collide.
+type CoreStack struct {
+	Offset    int    `yaml:"offset"`
+	CreatedAt string `yaml:"created_at"`
+	Base      string `yaml:"base"`
+}
+
 // Ledger is the whole state file.
 type Ledger struct {
-	Version int             `yaml:"version"`
-	Seeded  bool            `yaml:"seeded"`
-	PoolSeq int             `yaml:"pool_seq"`
-	Tasks   map[string]Task `yaml:"tasks"`
-	Pool    []PoolEntry     `yaml:"pool"`
+	Version    int                  `yaml:"version"`
+	Seeded     bool                 `yaml:"seeded"`
+	PoolSeq    int                  `yaml:"pool_seq"`
+	Tasks      map[string]Task      `yaml:"tasks"`
+	Pool       []PoolEntry          `yaml:"pool"`
+	CoreStacks map[string]CoreStack `yaml:"core_stacks"`
 }
 
 // ProcAlive reports whether a process-lock is live; injected so callers test
@@ -62,6 +74,9 @@ func Load(path string) (*Ledger, error) {
 	}
 	if l.Tasks == nil {
 		l.Tasks = map[string]Task{}
+	}
+	if l.CoreStacks == nil {
+		l.CoreStacks = map[string]CoreStack{}
 	}
 	return &l, nil
 }
