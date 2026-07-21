@@ -22,6 +22,9 @@ defaults:
   default_env: local
   default_project: default
   port_step: 10
+  # Base offset for standing `core-<project>` stacks (see `sdev core`). A reserved
+  # high band, disjoint from task offsets, so bookmarkable core URLs never shift.
+  core_port_offset_base: 1000
   base_ports:
     nginx: 8080
     api:   8000

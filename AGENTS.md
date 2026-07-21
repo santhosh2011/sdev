@@ -54,6 +54,19 @@ Single source of truth for three things, all defined in `bin/_lib.sh`:
 - `sdev destroy <slug>` (inline in `bin/sdev`) resolves a key from an on-disk workspace or a bare ledger entry (so a workspace-less lease is destroyable), refuses a live lease/lock without `--force`, then calls `force_teardown_task`.
 - Prune/destroy never reclaim a live-leased or live-locked task (an ephemeral task you `sdev hold` is protected too). Tests: `tests/ephemeral.bats`.
 
+## Core stacks — `sdev core <project> up|refresh|status|down`
+
+A project's ONE standing `core-<project>` stack: a stable, bookmarkable review/demo surface pinned to the base branch, alongside (never replacing) the ephemeral task stacks.
+Implemented bash-only in `bin/core` (dispatched by `bin/sdev`'s `core)` case with NO `try_go` — like `init`/`edit`); there is no Go port of the verbs.
+
+- **Path invariant**: the workspace is `$SDEV_HOME/stacks/<project>/` (a NEW top-level tree), deliberately distinct from `core/` (repo sources) and `projects/` (task worktrees). The word "core" is only in the stack NAME, never the path. A `.sdev-core` marker file tags it. Because `stacks/` is outside `projects/`, every task scanner (`list-tasks`, `status`, `prune`, `destroy`, `doctor`) is structurally blind to it — a core stack can never appear as, or be reclaimed as, a stale task.
+- **One detached worktree per repo** at `origin/<core_base>` (repo's `core_base`, else `default_base`), mirroring task workspaces but detached (no `task/<slug>` branch). Compose project name is `core-<project>`, so its DB volume (`core-<project>_db-data`) is distinct and persistent.
+- **Reserved stable offset**: `core_stacks: "<project>" -> {offset, created_at, base}` in `state.yml`, allocated ONCE from a reserved high band (`defaults.core_port_offset_base`, default 1000, step `port_step`) by `allocate_core_offset` and then never reallocated (bookmarkable). The task allocator and the core allocator each **union the other's offsets** into `used`, so the two blocks are provably disjoint. `_next_core_offset`/`core_offset_get`/`free_core_stack` live in `_lib.sh`.
+- **bash ↔ Go interop (sharp edge)**: Go's `state.Ledger` marshals the WHOLE file via `yaml.Marshal`, so it must carry a `CoreStacks map[string]CoreStack` (`yaml:"core_stacks"`) field (in `go/internal/state/ledger.go`) or any Go ledger write (`sdev new`/`end`/`destroy`/`prune`, handled by the dist-shipped `sdev-go`) would silently DROP `core_stacks` and lose the stable offset. Go also unions core offsets into `usedOffsets`. Covered by `tests/core.bats` ("bash<->go interop") and `go/internal/state` round-trip tests.
+- **`refresh` never force-discards**: `core_guard_clean` aborts if any worktree is dirty (`git status --porcelain`) OR has local commits not on `origin/<base>` (`merge-base --is-ancestor`); only then does `core_advance` fetch + `checkout --detach` to the new tip. No `reset --hard`/`clean` anywhere.
+- **Persistent DB**: `up`/`refresh` use `compose up -d --build` with no `-v`, so the seeded DB survives every refresh. Reseed is opt-in only (`refresh --reseed` → `compose down -v` then re-boot + seed). `down` stops but keeps the volume + workspace; `down --destroy` is the full teardown (worktrees + volumes + `free_core_stack`).
+- **Migrate/seed hooks** are optional project config (`core.migrate` / `core.seed`), run verbatim through the stack's `./compose` wrapper; DB creds come from the stack env (`app.env`), never from sdev.
+
 ## Testing
 
 - `bats tests/` — all tests use `tests/helpers.bash::make_fixture` (isolated `WORKSPACE_ROOT`). `make_source_repo` builds a source git repo. New bin scripts must be added to the `cp` list in `make_fixture` (that's how `doctor` got shipped into the fixture).
@@ -73,3 +86,10 @@ Single source of truth for three things, all defined in `bin/_lib.sh`:
 - **Install-time deps**: `install` (and legacy `bootstrap --check`) hard-require bash ≥ 4, mikefarah `yq` v4, and **git** (worktrees); **docker is runtime-only** (needed for `sdev up`) so it's a *warning*, not a fatal check in either. This is deliberate — GitHub's `macos-latest` runners have no Docker, so a fatal docker gate breaks the bats matrix (`install.bats`, `self_update.bats` run the real installer; `bootstrap.bats` runs `--check`). Covered by the "install treats docker as runtime-only" test.
 
 - Add durable project-specific notes here as they are discovered through real work.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

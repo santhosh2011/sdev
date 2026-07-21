@@ -133,6 +133,15 @@ config_shell_service() {   # $1=project -> compose service name to exec into
     if [[ -n "$v" && "$v" != "null" ]]; then echo "$v"; else echo "api"; fi
 }
 
+# Optional core-stack hook command (seed|migrate) for a project, or "". The value
+# is passed verbatim to the stack's ./compose wrapper (e.g. "exec -T api npm run
+# migrate"); DB creds come from the stack env, never from sdev.
+config_core_hook() {   # $1=project $2=hook
+    local v; v="$(yq -r ".core.\"$2\" // \"\"" "$(effective_project_file "$1")")"
+    [[ "$v" == "null" ]] && v=""
+    echo "$v"
+}
+
 # Whether new-task should wire sdev Claude hooks into the task's settings.
 # Default enabled; a project opts out with `hooks: false`.
 config_hooks_enabled() {   # $1=project
@@ -434,6 +443,7 @@ seeded: false
 pool_seq: 0
 tasks: {}
 pool: []
+core_stacks: {}
 YAML
 }
 
@@ -511,7 +521,8 @@ _allocate_offset_locked() {   # $1=key  $2=lease(0/1)  $3=holder  $4=ephemeral(0
         o="$(grep -E '^PORT_OFFSET=' "$e" 2>/dev/null | head -1 | cut -d= -f2)"
         [[ -n "$o" ]] && scan+="$o"$'\n'
     done < <(_live_env_files)
-    used="$( { yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null; printf '%s' "$scan"; } | sort -un )"
+    used="$( { yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null;
+               yq -r '.core_stacks[].offset' "$STATE_FILE" 2>/dev/null; printf '%s' "$scan"; } | sort -un )"
     candidate=$step
     while printf '%s\n' "$used" | grep -qx "$candidate"; do
         candidate=$((candidate + step))
@@ -531,6 +542,50 @@ allocate_offset() { with_state_lock _allocate_offset_locked "$@"; }
 _free_task_locked() { state_init; K="$1" yq -i 'del(.tasks[strenv(K)])' "$STATE_FILE"; }
 # free_task KEY — drop a task's reservation (offset + lease + lock).
 free_task() { with_state_lock _free_task_locked "$@"; }
+
+# --- core-stack offsets -------------------------------------------------------
+# A project's standing "core-<project>" stack gets ONE reserved port offset from
+# a high band, distinct from the task allocator. It is allocated once and then
+# STABLE (bookmarkable URLs never shift across refreshes). Both allocators union
+# the other's offsets into `used`, so the two blocks never collide.
+
+# First free offset in the reserved core band (defaults.core_port_offset_base,
+# step port_step), skipping offsets already held by a core stack or a task.
+_next_core_offset() {
+    local base step used candidate
+    base="$(global_get '.defaults.core_port_offset_base')"
+    [[ -n "$base" && "$base" != "null" ]] || base=1000
+    step="$(global_get '.defaults.port_step')"
+    used="$( { yq -r '.core_stacks[].offset' "$STATE_FILE" 2>/dev/null;
+               yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null; } | sort -un )"
+    candidate=$base
+    while printf '%s\n' "$used" | grep -qx "$candidate"; do candidate=$((candidate + step)); done
+    echo "$candidate"
+}
+
+_allocate_core_offset_locked() {   # $1=project  $2=base_branch
+    state_init
+    local existing; existing="$(P="$1" yq -r '.core_stacks[strenv(P)].offset // ""' "$STATE_FILE" 2>/dev/null)"
+    [[ -n "$existing" && "$existing" != "null" ]] && { echo "$existing"; return; }
+    local candidate; candidate="$(_next_core_offset)"
+    P="$1" OFF="$candidate" TS="$(_now)" B="${2:-}" yq -i '
+      .core_stacks[strenv(P)] = {"offset": (strenv(OFF)|tonumber), "created_at": strenv(TS), "base": strenv(B)}' "$STATE_FILE"
+    echo "$candidate"
+}
+# allocate_core_offset PROJECT [base] -> echoes the stable offset (reserving it once).
+allocate_core_offset() { with_state_lock _allocate_core_offset_locked "$@"; }
+
+# Echo a project's recorded core-stack offset ("" if none).
+core_offset_get() {   # $1=project
+    [[ -f "$STATE_FILE" ]] || return 0
+    local v; v="$(P="$1" yq -r '.core_stacks[strenv(P)].offset // ""' "$STATE_FILE" 2>/dev/null)"
+    [[ "$v" == "null" ]] && v=""
+    echo "$v"
+}
+
+_free_core_stack_locked() { state_init; P="$1" yq -i 'del(.core_stacks[strenv(P)])' "$STATE_FILE"; }
+# free_core_stack PROJECT — drop a core stack's reserved offset from the ledger.
+free_core_stack() { with_state_lock _free_core_stack_locked "$@"; }
 
 # Force-tear-down a task with NO archive, NO pool, NO pre-flight: stop its docker
 # stack, remove each repo worktree, delete its task/<slug> branches, drop the

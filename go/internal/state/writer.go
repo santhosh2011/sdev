@@ -23,7 +23,7 @@ func Init(home string) error {
 	if _, err := os.Stat(FilePath(home)); err == nil {
 		return nil
 	}
-	return Save(home, &Ledger{Version: 1, Tasks: map[string]Task{}, Pool: []PoolEntry{}})
+	return Save(home, &Ledger{Version: 1, Tasks: map[string]Task{}, Pool: []PoolEntry{}, CoreStacks: map[string]CoreStack{}})
 }
 
 // Save atomically writes the ledger: marshal to a temp file in the state dir,
@@ -35,6 +35,9 @@ func Save(home string, l *Ledger) error {
 	}
 	if l.Pool == nil {
 		l.Pool = []PoolEntry{}
+	}
+	if l.CoreStacks == nil {
+		l.CoreStacks = map[string]CoreStack{}
 	}
 	data, err := yaml.Marshal(l)
 	if err != nil {
@@ -154,12 +157,16 @@ func reconcile(home string, l *Ledger, alive ProcAlive) {
 	}
 }
 
-// usedOffsets is the set of reserved offsets: ledger offsets union a fresh .env
-// scan (belt-and-suspenders against an on-disk task missing from the ledger).
+// usedOffsets is the set of reserved offsets: ledger task offsets, core-stack
+// offsets (the reserved high band), and a fresh .env scan (belt-and-suspenders
+// against an on-disk task missing from the ledger).
 func usedOffsets(home string, l *Ledger) map[int]bool {
 	used := map[int]bool{}
 	for _, t := range l.Tasks {
 		used[t.Offset] = true
+	}
+	for _, c := range l.CoreStacks {
+		used[c.Offset] = true
 	}
 	for _, env := range LiveEnvPaths(home) {
 		if off := envOffset(env); off >= 0 {

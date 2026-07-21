@@ -23,7 +23,8 @@ make_fixture() {
     cp "$REPO_BIN"/_lib.sh "$REPO_BIN"/sdev "$REPO_BIN"/new-task \
        "$REPO_BIN"/list-tasks "$REPO_BIN"/end-task "$REPO_BIN"/migrate \
        "$REPO_BIN"/init "$REPO_BIN"/edit-project "$REPO_BIN"/doctor \
-       "$REPO_BIN"/prune "$REPO_BIN"/status "$REPO_BIN"/start "$REPO_BIN"/review "$REPO_BIN"/ship "$WORKSPACE_ROOT/bin/"
+       "$REPO_BIN"/prune "$REPO_BIN"/status "$REPO_BIN"/start "$REPO_BIN"/review \
+       "$REPO_BIN"/ship "$REPO_BIN"/core "$WORKSPACE_ROOT/bin/"
     cp -R "$REPO_BIN/templates" "$WORKSPACE_ROOT/bin/templates"
     # Ship the Claude hook scripts into the fixture so $SDEV_INSTALL/claude/hooks
     # resolves (SDEV_INSTALL = parent of bin = $WORKSPACE_ROOT).
@@ -47,6 +48,7 @@ defaults:
   default_env: local
   default_project: default
   port_step: 10
+  core_port_offset_base: 1000
   base_ports: { nginx: 8080, api: 8291, ui: 5173, db: 3306, redis: 6379 }
 YAML
 }

@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# sdev core — a project's one standing "core-<project>" stack: a stable,
+# bookmarkable review/demo surface pinned to the base branch, with a persistent
+# seeded DB. Lives in stacks/<project>/, entirely separate from task workspaces.
+set -euo pipefail
+
+# Resolve script dir, following symlinks (mirrors bin/status / bin/start so a
+# ~/.local/bin symlink still resolves templates next to the real bin dir).
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
+usage() {
+    cat <<EOF
+Usage: sdev core [<project>] <up|refresh|status|down> [flags]
+
+  up [--no-boot] [--no-fetch]        create the core stack if absent, then boot it
+  refresh [--reseed] [--no-boot]     fast-forward to origin/<base>, restack, migrate
+  status [--json]                    show offset, ports, url, and per-repo freshness
+  down [--volumes] [--destroy]       stop the stack; --destroy removes it + frees the offset
+
+The core stack is named core-<project> and lives in stacks/<project>/ (distinct
+from core/ repo sources and projects/ task workspaces). Its port offset is
+reserved once from a high band and stays stable, so bookmarked URLs never shift.
+'refresh' never discards uncommitted or unpushed local work — it aborts instead.
+EOF
+}
+
+is_core_verb() { case "$1" in up|refresh|status|down) return 0 ;; *) return 1 ;; esac; }
+
+# ---- per-repo helpers --------------------------------------------------------
+
+# Core stack's base branch for a repo: repos.<r>.core_base, else default_base.
+core_base_for_repo() {   # $1=repo
+    local v; v="$(config_repo_attr "$PROJECT" "$1" core_base)"
+    [[ -n "$v" ]] && { echo "$v"; return; }
+    config_repo_base "$PROJECT" "$1"
+}
+
+# Freshest start point for a repo's base: the origin tip, else a local branch.
+core_start_point() {   # $1=src $2=base
+    if git -C "$1" show-ref --verify --quiet "refs/remotes/origin/$2"; then echo "origin/$2"
+    elif git -C "$1" show-ref --verify --quiet "refs/heads/$2"; then echo "$2"
+    else die "$1: base branch '$2' not found locally or on origin"; fi
+}
+
+# Remove each repo's detached core worktree (no branch to delete — detached).
+core_remove_worktrees() {
+    local r rp src
+    while read -r r; do
+        rp="$(config_repo_path "$PROJECT" "$r")"
+        [[ -d "$STACK_DIR/$rp" ]] || continue
+        src="$(repo_source_dir "$PROJECT" "$rp")"
+        git -C "$src" worktree remove --force "$STACK_DIR/$rp" 2>/dev/null || true
+    done < <(config_repos "$PROJECT")
+}
+
+# ---- scaffold ----------------------------------------------------------------
+
+# Add one detached worktree per repo at the freshest <base> tip (fetch unless
+# --no-fetch). Mirrors new-task, but detached instead of a task/<slug> branch.
+core_add_worktrees() {   # $@=repos
+    local r rp base src start
+    for r in "$@"; do
+        rp="$(config_repo_path "$PROJECT" "$r")"; base="$(core_base_for_repo "$r")"
+        src="$(repo_source_dir "$PROJECT" "$rp")"
+        [[ -d "$src/.git" || -f "$src/.git" ]] || die "$rp: no git source at $src"
+        [[ $NO_FETCH -eq 0 ]] && git -C "$src" fetch --quiet origin "$base" 2>/dev/null || true
+        start="$(core_start_point "$src" "$base")"
+        mkdir -p "$(dirname "$STACK_DIR/$rp")"
+        git -C "$src" worktree add --detach "$STACK_DIR/$rp" "$start" >/dev/null
+    done
+}
+
+# Emit "<SVC>_HOST_PORT=<port>" lines for the project's stack services.
+core_port_lines() {   # $1=offset
+    local svc base var
+    while read -r svc; do
+        base="$(config_base_port "$PROJECT" "$svc")"
+        var="$(echo "$svc" | tr '[:lower:]-' '[:upper:]_')_HOST_PORT"
+        echo "${var}=$(( base + $1 ))"
+    done < <(config_stack_services "$PROJECT")
+}
+
+core_write_env() {   # $1=offset
+    local profile conf
+    profile="$(config_default_env)"; conf="$(profile_conf_file "$profile" "$PROJECT")"
+    { echo "COMPOSE_PROJECT_NAME=core-$PROJECT"; echo "PORT_OFFSET=$1"; echo "APP_ENV=$profile"
+      core_port_lines "$1"; } > "$STACK_DIR/.env"
+    ln -sf "$conf" "$STACK_DIR/app.env"
+    [[ -f "$conf" ]] || log "warning: $conf missing — create it before boot"
+}
+
+# Prune ui/nginx from the default template when the project has no ui repo
+# (mirrors new-task); else install the nginx.conf the default nginx needs.
+core_prune_default_services() {   # $@=repos
+    if printf '%s\n' "$@" | grep -qx ui; then
+        cp "$SCRIPT_DIR/templates/nginx.conf.tmpl" "$STACK_DIR/nginx.conf"
+    else
+        yq -i 'del(.services.ui) | del(.services.nginx) | del(.volumes."ui-node-modules")' "$STACK_DIR/docker-compose.yml"
+    fi
+}
+
+core_write_compose() {   # $@=repos
+    cp "$(config_template "$PROJECT")" "$STACK_DIR/docker-compose.yml"
+    cp "$SCRIPT_DIR/templates/compose.tmpl" "$STACK_DIR/compose"
+    chmod +x "$STACK_DIR/compose"
+    config_uses_default_template "$PROJECT" && core_prune_default_services "$@"
+}
+
+core_scaffold_rollback() {
+    core_remove_worktrees 2>/dev/null || true
+    rm -rf "${STACK_DIR:?}"
+    free_core_stack "$PROJECT" 2>/dev/null || true
+    log "core scaffold rolled back"
+}
+
+core_scaffold() {
+    local repos=(); mapfile -t repos < <(config_repos "$PROJECT")
+    [[ ${#repos[@]} -gt 0 ]] || die "project '$PROJECT' has no repos configured"
+    mkdir -p "$STACK_DIR"; trap 'core_scaffold_rollback' ERR
+    core_add_worktrees "${repos[@]}"
+    local offset; offset="$(allocate_core_offset "$PROJECT" "$(core_base_for_repo "${repos[0]}")")"
+    core_write_env "$offset"; core_write_compose "${repos[@]}"; touch "$STACK_DIR/.sdev-core"
+    trap - ERR
+    log "core stack scaffolded: stacks/$PROJECT (stack=core-$PROJECT, offset=$offset)"
+}
+
+# ---- boot / hooks / reporting ------------------------------------------------
+
+core_boot() { ( cd "$STACK_DIR" && ./compose up -d --build ); }
+
+# Run an optional project hook (seed|migrate) through the stack's compose wrapper.
+core_run_hook() {   # $1=hook
+    local cmd; cmd="$(config_core_hook "$PROJECT" "$1")"
+    [[ -n "$cmd" ]] || { log "no core.$1 hook configured — skipping"; return; }
+    log "running core.$1 hook"
+    # shellcheck disable=SC2086  # cmd is an intentional multi-word compose argv
+    ( cd "$STACK_DIR" && ./compose $cmd )
+}
+
+core_url() {
+    local port; port="$(grep '^NGINX_HOST_PORT=' "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2 || true)"
+    [[ -n "$port" ]] && echo "http://localhost:$port/"
+}
+
+core_running_count() {
+    { docker ps --filter "label=com.docker.compose.project=core-$PROJECT" -q 2>/dev/null || true; } | wc -l | tr -d ' '
+}
+
+# ---- verbs -------------------------------------------------------------------
+
+core_up() {
+    local fresh=0
+    [[ -d "$STACK_DIR" ]] || { core_scaffold; fresh=1; }
+    [[ $NO_BOOT -eq 1 ]] && { log "scaffolded (--no-boot); run 'sdev core $PROJECT up' to boot"; return; }
+    core_boot
+    [[ $fresh -eq 1 ]] && core_run_hook seed
+    core_run_hook migrate
+    log "core-$PROJECT up$(core_url | sed 's/^/ -> /')"
+}
+
+# Refuse to refresh if a worktree is dirty or has local commits not on origin —
+# aborts with guidance, never discards.
+core_guard_no_divergence() {   # $1=wt $2=base
+    git -C "$1" show-ref --verify --quiet "refs/remotes/origin/$2" || return 0
+    git -C "$1" merge-base --is-ancestor HEAD "origin/$2" 2>/dev/null \
+        || die "$1: core HEAD has local commits not on origin/$2 — refusing to move (would orphan them)"
+}
+
+core_guard_clean() {   # $@=repos
+    local r rp base wt
+    for r in "$@"; do
+        rp="$(config_repo_path "$PROJECT" "$r")"; wt="$STACK_DIR/$rp"
+        [[ -d "$wt" ]] || continue
+        base="$(core_base_for_repo "$r")"
+        [[ -z "$(git -C "$wt" status --porcelain)" ]] \
+            || die "$rp: core worktree has uncommitted changes — commit/stash, or 'sdev core $PROJECT down --destroy' to rebuild; refusing to discard"
+        core_guard_no_divergence "$wt" "$base"
+    done
+}
+
+# Fast-forward each detached worktree to the latest <base> tip. Guards ran first,
+# so a clean detached checkout never discards work.
+core_advance() {   # $@=repos
+    local r rp base src wt start
+    for r in "$@"; do
+        rp="$(config_repo_path "$PROJECT" "$r")"; wt="$STACK_DIR/$rp"
+        [[ -d "$wt" ]] || continue
+        base="$(core_base_for_repo "$r")"; src="$(repo_source_dir "$PROJECT" "$rp")"
+        [[ $NO_FETCH -eq 0 ]] && git -C "$src" fetch --quiet origin "$base" 2>/dev/null || true
+        start="$(core_start_point "$src" "$base")"
+        git -C "$wt" checkout --detach --quiet "$start"
+        log "$rp advanced to $start ($(git -C "$wt" rev-parse --short HEAD))"
+    done
+}
+
+core_refresh() {
+    [[ -d "$STACK_DIR" ]] || die "no core stack for '$PROJECT' — run 'sdev core $PROJECT up' first"
+    local repos=(); mapfile -t repos < <(config_repos "$PROJECT")
+    core_guard_clean "${repos[@]}"
+    core_advance "${repos[@]}"
+    [[ $NO_BOOT -eq 1 ]] && { log "refreshed source (--no-boot)"; return; }
+    [[ $RESEED -eq 1 ]] && ( cd "$STACK_DIR" && ./compose down -v >/dev/null 2>&1 || true )
+    core_boot
+    [[ $RESEED -eq 1 ]] && core_run_hook seed
+    core_run_hook migrate
+    log "core-$PROJECT refreshed$(core_url | sed 's/^/ -> /')"
+}
+
+# Per-repo: short HEAD sha + how many commits behind origin/<base>.
+core_repo_status() {
+    local r rp base wt behind head
+    while read -r r; do
+        rp="$(config_repo_path "$PROJECT" "$r")"; wt="$STACK_DIR/$rp"
+        [[ -d "$wt" ]] || continue
+        base="$(core_base_for_repo "$r")"
+        behind="$(git -C "$wt" rev-list --count "HEAD..origin/$base" 2>/dev/null || echo '?')"
+        head="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo '?')"
+        printf "  %-16s %s  (%s behind origin/%s)\n" "$rp" "$head" "$behind" "$base"
+    done < <(config_repos "$PROJECT")
+}
+
+core_status_json() {
+    local offset url running
+    offset="$(core_offset_get "$PROJECT")"; url="$(core_url)"; running="$(core_running_count)"
+    jq -n --arg stack "core-$PROJECT" --arg project "$PROJECT" \
+        --argjson offset "${offset:-0}" --arg url "$url" --argjson running "$running" \
+        '{stack:$stack, project:$project, offset:$offset, url:$url, running:$running}'
+}
+
+core_status() {
+    [[ -d "$STACK_DIR" ]] || die "no core stack for '$PROJECT' (run 'sdev core $PROJECT up')"
+    [[ $JSON -eq 1 ]] && { core_status_json; return; }
+    printf "core-%s  offset=%s  url=%s  running=%s containers\n" \
+        "$PROJECT" "$(core_offset_get "$PROJECT")" "$(core_url || echo N/A)" "$(core_running_count)"
+    core_repo_status
+}
+
+core_destroy() {
+    ( cd "$STACK_DIR" && ./compose down -v --remove-orphans >/dev/null 2>&1 || true )
+    core_remove_worktrees
+    rm -rf "${STACK_DIR:?}"
+    free_core_stack "$PROJECT"
+    log "core-$PROJECT destroyed (workspace + offset freed)"
+}
+
+core_down() {
+    [[ -d "$STACK_DIR" ]] || die "no core stack for '$PROJECT'"
+    [[ $DESTROY -eq 1 ]] && { core_destroy; return; }
+    local dv=(); [[ $VOLUMES -eq 1 ]] && dv=(-v --remove-orphans)
+    ( cd "$STACK_DIR" && ./compose down "${dv[@]}" )
+    log "core-$PROJECT stopped"
+}
+
+# ---- parse + dispatch --------------------------------------------------------
+
+PROJECT_ARG=""; VERB=""
+NO_BOOT=0; NO_FETCH=0; RESEED=0; VOLUMES=0; DESTROY=0; JSON=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --no-boot) NO_BOOT=1; shift ;;
+        --no-fetch) NO_FETCH=1; shift ;;
+        --reseed) RESEED=1; shift ;;
+        --volumes) VOLUMES=1; shift ;;
+        --destroy) DESTROY=1; shift ;;
+        --json) JSON=1; shift ;;
+        --*) die "unknown flag: $1" ;;
+        *)
+            if [[ -z "$VERB" ]] && is_core_verb "$1"; then VERB="$1"
+            elif [[ -z "$PROJECT_ARG" ]]; then PROJECT_ARG="$1"
+            elif [[ -z "$VERB" ]]; then VERB="$1"
+            else die "unexpected arg: $1"; fi
+            shift ;;
+    esac
+done
+
+PROJECT="$(require_project "$(resolve_project "$PROJECT_ARG")")"
+[[ -n "$VERB" ]] || { usage; die "verb required (up|refresh|status|down)"; }
+STACK_DIR="$SDEV_HOME/stacks/$PROJECT"
+
+case "$VERB" in
+    up)      core_up ;;
+    refresh) core_refresh ;;
+    status)  core_status ;;
+    down)    core_down ;;
+    *)       usage; die "unknown verb: $VERB" ;;
+esac

@@ -16,12 +16,21 @@ default_shell_service: api
 # the global stack_services.
 # stack_services: [nginx, api, ui, db, redis]
 
+# OPTIONAL: the standing `core-<project>` stack (see `sdev core up|refresh`).
+# Hooks are run verbatim through the stack's ./compose wrapper; DB creds come
+# from the stack env (app.env), never from sdev — no connection strings here.
+# core:
+#   migrate: "exec -T api npm run migrate"
+#   seed:    "exec -T api npm run seed"
+
 # Repos worktreed into each task. `path` is relative to core/<project>/<path>
-# (the worktree source), falling back to core/<path>.
+# (the worktree source), falling back to core/<path>. `core_base` (optional)
+# is the branch the core stack tracks; it falls back to `default_base`.
 repos:
   api:
     path: my-api-repo
     default_base: main
+    core_base: develop
     compose_role: api
     link_node_modules: false
   web:

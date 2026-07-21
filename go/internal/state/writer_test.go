@@ -97,6 +97,50 @@ func TestFreeTaskRemovesEntry(t *testing.T) {
 	}
 }
 
+func TestSavePreservesCoreStacks(t *testing.T) {
+	home := t.TempDir()
+	seedCore(t, home, "acme", CoreStack{Offset: 1000, Base: "develop"})
+
+	// A task write goes through Save; core_stacks must survive it, not be dropped.
+	if _, err := AllocateOffset(home, Reservation{Key: "acme/a"}, 10, alwaysDead); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := Load(FilePath(home))
+	if got := l.CoreStacks["acme"].Offset; got != 1000 {
+		t.Fatalf("core_stacks dropped or changed by a task write: offset = %d, want 1000", got)
+	}
+}
+
+func TestAllocateOffsetSkipsCoreStackOffset(t *testing.T) {
+	home := t.TempDir()
+	seedCore(t, home, "acme", CoreStack{Offset: 10, Base: "develop"})
+	mkTaskDir(t, home, "acme/a")
+
+	off, err := AllocateOffset(home, Reservation{Key: "acme/a"}, 10, alwaysDead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off != 20 {
+		t.Fatalf("offset = %d, want 20 (core-stack offset 10 is reserved)", off)
+	}
+}
+
+func seedCore(t *testing.T, home, project string, cs CoreStack) {
+	t.Helper()
+	if err := Init(home); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(FilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Seeded = true
+	l.CoreStacks[project] = cs
+	if err := Save(home, l); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mkTaskDir(t *testing.T, home, key string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(home, "projects", key), 0o755); err != nil {
