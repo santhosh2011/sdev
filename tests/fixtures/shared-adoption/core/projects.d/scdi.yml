@@ -1,0 +1,32 @@
+# SCDI (cognito-ai-scdi) — the migrated NVIDIA-repo project.
+# New project; the legacy 'sdi' project + its old task workspaces are left as-is.
+#   api -> edm-apps-scdi-backend     (worktree dir: cognito_ai_scdi_api)
+#   ui  -> edm-apps-ai-observability (vite app in cognitoaitesting/)
+# NOTE: backend stack is verified working. The UI's /scdi module talks to the
+# backend's /scdi-api and works behind nginx (single origin: / -> ui, /scdi-api
+# -> api; see core/scdi/nginx.conf). The UI's other modules (/validation-api,
+# /cognito/api) have no backend in this stack and 502 — pending migration.
+# Sources under core/scdi/ (see core/scdi/README.md).
+conf_prefix: cognito-ai-scdi-api
+default_shell_service: api
+template: core/scdi/docker-compose.tmpl
+# nginx host port = 5200 + offset (matches nginx.conf `listen 5200`).
+stack_services: [nginx, api, ui, db, redis]
+base_ports:
+  nginx: 5200
+repos:
+  api:
+    path: cognito_ai_scdi_api
+    default_base: develop
+    compose_role: api
+    link_node_modules: false
+  ui:
+    path: edm-apps-ai-observability
+    default_base: develop
+    compose_role: ui
+    link_node_modules: false
+  common:
+    path: common
+    default_base: develop
+    compose_role: common
+    link_node_modules: false

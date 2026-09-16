@@ -283,3 +283,8 @@ server per version/pin, outside task workspaces. No shipped project opts in;
 custom templates and registries must adopt the shared database together. See
 [shared infrastructure](docs/shared-infra.md) for commands, data ownership,
 custom pins and the adoption contract.
+
+Ready-to-apply [PDMT/SCDI adoption patches](artifacts/shared-infra/postgres-patches/README.md)
+pair the deployed templates with their registry opt-ins. Both use Postgres 18;
+existing workspaces retain their snapshots. Applying these operational artifacts
+to a deployed SDEV_HOME is a separate step from installing sdev.
