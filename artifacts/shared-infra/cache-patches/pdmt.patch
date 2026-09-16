@@ -1,0 +1,120 @@
+--- a/core/pdmt/docker-compose.tmpl
++++ b/core/pdmt/docker-compose.tmpl
+@@ -45,14 +45,12 @@
+   PYTHONPATH: /app/common/src:/app/backend/src
+   PYTHONUNBUFFERED: "1"
+   PIP_ROOT_USER_ACTION: ignore
+-
+ # The pip cache is shared by seed/api/worker/beat so only the first of the four
+ # pays for the requirements.txt download.
+ x-pymounts: &pymounts
+   - ./edm-apps-obs-pdmt-chips-ui/common:/app/common
+   - ./edm-apps-obs-pdmt-chips-ui/backend:/app/backend
+   - pip-cache:/root/.cache/pip
+-
+ services:
+   db:
+     image: postgres:18
+@@ -72,7 +70,6 @@
+       timeout: 5s
+       retries: 20
+     networks: [task-net]
+-
+   # One-shot: migrate + load the deterministic e2e fixtures (GB200/H100/STGE/...),
+   # so the canvas has data without Databricks creds or VPN. api/worker/beat all wait
+   # on it, so exactly one process runs alembic.
+@@ -91,18 +88,15 @@
+       - bash
+       - -lc
+       - >
+-        pip install --quiet -r requirements.txt &&
+-        alembic upgrade head &&
+-        python e2e/seed/adapter.py --fixtures e2e/seed/fixtures.json
+-    networks: [task-net]
++        pip install --quiet -r requirements.txt && alembic upgrade head && python e2e/seed/adapter.py --fixtures e2e/seed/fixtures.json
+ 
++    networks: [task-net]
+   redis:
+     image: redis:7-alpine
+     restart: unless-stopped
+     ports:
+       - "127.0.0.1:${REDIS_HOST_PORT}:6379"
+     networks: [task-net]
+-
+   api:
+     image: python:3.14
+     restart: unless-stopped
+@@ -125,10 +119,9 @@
+       - bash
+       - -lc
+       - >
+-        pip install --quiet -r requirements.txt &&
+-        uvicorn pdmt_chips_api.main:app --host 0.0.0.0 --port 8291 --reload
+-    networks: [task-net]
++        pip install --quiet -r requirements.txt && uvicorn pdmt_chips_api.main:app --host 0.0.0.0 --port 8291 --reload
+ 
++    networks: [task-net]
+   # TaskIQ replaced Celery: the broker is a Redis Stream, the task modules must be
+   # named on the command line, and the cron schedules are declared as task labels
+   # (see backend/src/pdmt_chips_api/core/taskiq_app.py). Keep this argv in step with
+@@ -151,12 +144,9 @@
+       - bash
+       - -lc
+       - >
+-        pip install --quiet -r requirements.txt &&
+-        taskiq worker pdmt_chips_api.core.taskiq_app:broker
+-        pdmt_chips_api.modules.bom_visualisation.tasks
+-        pdmt_chips_api.modules.chat.glossary.tasks
+-    networks: [task-net]
++        pip install --quiet -r requirements.txt && taskiq worker pdmt_chips_api.core.taskiq_app:broker pdmt_chips_api.modules.bom_visualisation.tasks pdmt_chips_api.modules.chat.glossary.tasks
+ 
++    networks: [task-net]
+   beat:
+     image: python:3.14
+     restart: unless-stopped
+@@ -175,12 +165,9 @@
+       - bash
+       - -lc
+       - >
+-        pip install --quiet -r requirements.txt &&
+-        taskiq scheduler pdmt_chips_api.core.taskiq_app:scheduler
+-        pdmt_chips_api.modules.bom_visualisation.tasks
+-        pdmt_chips_api.modules.chat.glossary.tasks
+-    networks: [task-net]
++        pip install --quiet -r requirements.txt && taskiq scheduler pdmt_chips_api.core.taskiq_app:scheduler pdmt_chips_api.modules.bom_visualisation.tasks pdmt_chips_api.modules.chat.glossary.tasks
+ 
++    networks: [task-net]
+   # UI dev server in-container (vite) — serves the SPA and proxies /pdmt-api ->
+   # api over the compose network. node_modules live in anonymous volumes because
+   # the host dirs hold darwin binaries and the container needs linux ones.
+@@ -201,6 +188,7 @@
+       - ./edm-apps-obs-pdmt-chips-ui/ui:/app/ui
+       - /app/common/node_modules
+       - /app/ui/node_modules
++      - npm-cache:/root/.npm
+     ports:
+       - "${NGINX_HOST_PORT}:5173"
+     depends_on:
+@@ -210,15 +198,17 @@
+       - bash
+       - -lc
+       - >
+-        cd /app/common && npm install && npm run build &&
+-        cd /app/ui && npm install --no-package-lock &&
+-        npm run dev
+-    networks: [task-net]
++        cd /app/common && npm install && npm run build && cd /app/ui && npm install --no-package-lock && npm run dev
+ 
++    networks: [task-net]
+ volumes:
+   chips-postgres:
+   pip-cache:
+-
++    external: true
++    name: sdev-pip-cache
++  npm-cache:
++    external: true
++    name: sdev-npm-cache
+ networks:
+   task-net:
+     driver: bridge

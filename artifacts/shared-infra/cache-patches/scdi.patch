@@ -1,0 +1,73 @@
+--- a/core/scdi/docker-compose.tmpl
++++ b/core/scdi/docker-compose.tmpl
+@@ -34,7 +34,6 @@
+       timeout: 5s
+       retries: 20
+     networks: [task-net]
+-
+   redis:
+     image: redis:7-alpine
+     restart: unless-stopped
+@@ -46,7 +45,6 @@
+       timeout: 3s
+       retries: 20
+     networks: [task-net]
+-
+   api:
+     build:
+       context: ./cognito_ai_scdi_api
+@@ -90,7 +88,6 @@
+         fi
+         exec uvicorn scdi_api.api.main:app --host 0.0.0.0 --port 8291 --reload
+     networks: [task-net]
+-
+   worker:
+     build:
+       context: ./cognito_ai_scdi_api
+@@ -117,7 +114,6 @@
+       redis:
+         condition: service_started
+     networks: [task-net]
+-
+   beat:
+     build:
+       context: ./cognito_ai_scdi_api
+@@ -142,7 +138,6 @@
+       redis:
+         condition: service_started
+     networks: [task-net]
+-
+   ui:
+     image: node:22
+     restart: unless-stopped
+@@ -155,6 +150,7 @@
+       # develop layout: the scdi-ui vite app lives at the repo ROOT (was cognitoaitesting/)
+       - ./edm-apps-ai-observability:/app
+       - scdi-ui-node-modules:/app/node_modules
++      - npm-cache:/root/.npm
+     depends_on:
+       api:
+         condition: service_started
+@@ -178,7 +174,6 @@
+           vite.config.js
+         exec npm run dev -- --host 0.0.0.0 --port 5173
+     networks: [task-net]
+-
+   # Single-origin reverse proxy (confs/nginx.conf, upstreams repointed at task-net
+   # service names — see core/scdi/nginx.conf). Routes / -> ui, /scdi-api -> api.
+   nginx:
+@@ -194,11 +189,12 @@
+       ui:
+         condition: service_started
+     networks: [task-net]
+-
+ volumes:
+   scdi-postgres:
+   scdi-ui-node-modules:
+-
++  npm-cache:
++    external: true
++    name: sdev-npm-cache
+ networks:
+   task-net:
+     driver: bridge
