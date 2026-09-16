@@ -1,8 +1,11 @@
 # Shared Postgres infrastructure
 
-This change adds the infrastructure foundation, **without opting any project
-in or changing existing workspaces**. PDMT/SCDI template and registry adoption are the next change; lifecycle hooks
-are present but bypassed for every unmarked workspace. Redis, Nginx and
+Shared Postgres is opt-in; lifecycle hooks bypass every unmarked workspace.
+PDMT/SCDI template-and-registry adoption patches are available in the repository
+under `artifacts/shared-infra/postgres-patches/README.md`. Both target Postgres
+18, including the approved SCDI move from 16; operators apply them to their
+deployed project definitions separately. Existing workspaces keep their copied
+templates, credentials and database version. Redis, Nginx and
 `prune --volumes` remain outside this change. Redis sharing first requires
 application-specific queue/stream/key prefixes.
 

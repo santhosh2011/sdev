@@ -1,0 +1,33 @@
+# PDMT "chips" project — the consolidated monorepo edm-apps-obs-pdmt-chips-ui.
+#
+# The three former repos were merged into ONE repo:
+#   edm-apps-obs-pdmt-chips-api  -> ./backend
+#   edm-apps-obs-pdmt-chips-ui   -> ./ui           (the repo kept this name)
+#   edm-apps-obs-common          -> ./common       (now a git submodule)
+#
+# A task is therefore a SINGLE worktree of edm-apps-obs-pdmt-chips-ui. Its dev
+# stack mirrors the repo's own docker-compose.local.yml: mysql + redis +
+# api (uvicorn --reload) + worker + beat + ui (vite dev server). No nginx/static
+# build — vite serves the SPA and proxies to the api.
+#
+# SUBMODULE bootstrap: `git worktree add` does NOT init submodules, so after
+# `sdev new <slug>` and before `sdev up`, populate common once:
+#   git -C projects/pdmt/<slug>/edm-apps-obs-pdmt-chips-ui submodule update --init
+#   # or: cd projects/pdmt/<slug>/edm-apps-obs-pdmt-chips-ui && make bootstrap
+
+conf_prefix: pdmt-chips-api          # -> confs/pdmt/pdmt-chips-api.<profile>.env (Databricks creds)
+default_shell_service: api
+template: core/pdmt/docker-compose.tmpl
+
+# Host-exposed services that get a per-task port offset. 'nginx' is kept as the
+# primary web-port SLOT (base 8080) so `sdev open` and the task URL keep working;
+# the vite `ui` service publishes on ${NGINX_HOST_PORT}. api/db/redis are exposed
+# for direct access.
+stack_services: [nginx, api, db, redis]
+
+repos:
+  chips:
+    path: edm-apps-obs-pdmt-chips-ui
+    default_base: develop
+    compose_role: app
+    link_node_modules: false        # npm install runs in-container into anon volumes

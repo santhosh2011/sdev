@@ -69,7 +69,7 @@ Implemented bash-only in `bin/core` (dispatched by `bin/sdev`'s `core)` case wit
 
 ## Shared Postgres foundation — `sdev infra`
 
-`bin/infra` and `bin/_infra.sh` own standing flavor-specific servers under `$SDEV_HOME/infra/`; see `docs/shared-infra.md` for lifecycle and the adoption contract. No project is opted in yet; `bin/infra-task` bridges snapshot-gated Bash/Go lifecycle hooks. Workspace files must never reference the provider's data volume. Consumer counts come from Docker, never a stored refcount. Go must preserve `shared_infra` on every ledger write and all allocators must skip its offsets. Tests: `tests/infra.bats`, `go/internal/state/writer_test.go`; opt-in engine proof: `tests/infra_live.sh`.
+`bin/infra` and `bin/_infra.sh` own standing flavor-specific servers under `$SDEV_HOME/infra/`; see `docs/shared-infra.md` for lifecycle and the adoption contract. `bin/infra-task` bridges snapshot-gated Bash/Go lifecycle hooks. Workspace files must never reference the provider's data volume. Consumer counts come from Docker, never a stored refcount. Go must preserve `shared_infra` on every ledger write and all allocators must skip its offsets. Tests: `tests/infra.bats`, `go/internal/state/writer_test.go`; opt-in engine proof: `tests/infra_live.sh`. PDMT/SCDI deployment patches and apply order live in `artifacts/shared-infra/postgres-patches/README.md`, tested by `tests/adoption.bats`; these are not installation defaults.
 
 ## Testing
 

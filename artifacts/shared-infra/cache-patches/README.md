@@ -20,5 +20,9 @@ create `sdev-npm-cache` once before booting with an older wrapper. This cache
 patch leaves SCDI's Postgres version unchanged; the approved version move and
 shared-database adoption belong to the subsequent infrastructure changes.
 
+The subsequent template-and-registry adoption patches now live in
+[`../postgres-patches/`](../postgres-patches/README.md). Apply these cache
+patches first; the Postgres patches are incremental on this exact baseline.
+
 YAML was edited with mikefarah yq v4; its serialization also normalizes spacing
 and folds existing multiline YAML scalars without changing their values.

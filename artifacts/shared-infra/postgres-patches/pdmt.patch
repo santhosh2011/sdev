@@ -1,0 +1,194 @@
+--- a/core/pdmt/docker-compose.tmpl
++++ b/core/pdmt/docker-compose.tmpl
+@@ -25,11 +25,11 @@
+
+ x-pyenv: &pyenv
+   DB_DIALECT: postgresql
+-  DB_HOST: db
+-  DB_PORT: "5432"
+-  DB_USER: postgres
+-  DB_PASSWORD: pdmt
+-  DB_NAME: pdmt_chips
++  DB_HOST: ${DB_HOST}
++  DB_PORT: "${DB_PORT}"
++  DB_USER: ${DB_USER}
++  DB_PASSWORD: ${DB_PASSWORD}
++  DB_NAME: ${DB_NAME}
+   # app.env pins the Databricks schema (sch_edm_obs_chips), which the local postgres
+   # does not have — and the pinned `common` submodule's make_async_engine() takes no
+   # `schema=` kwarg yet, so a set DB_SCHEMA is a TypeError at startup. Blank it, the
+@@ -52,24 +52,6 @@
+   - ./edm-apps-obs-pdmt-chips-ui/backend:/app/backend
+   - pip-cache:/root/.cache/pip
+ services:
+-  db:
+-    image: postgres:18
+-    restart: unless-stopped
+-    environment:
+-      POSTGRES_PASSWORD: pdmt
+-      POSTGRES_DB: pdmt_chips
+-    ports:
+-      - "127.0.0.1:${DB_HOST_PORT}:5432"
+-    volumes:
+-      # postgres:18 stores data under a major-version subdirectory, so the mount
+-      # must be the parent — see backend/e2e/docker-compose.e2e.yml.
+-      - chips-postgres:/var/lib/postgresql
+-    healthcheck:
+-      test: ["CMD-SHELL", "pg_isready -U postgres -d pdmt_chips"]
+-      interval: 5s
+-      timeout: 5s
+-      retries: 20
+-    networks: [task-net]
+   # One-shot: migrate + load the deterministic e2e fixtures (GB200/H100/STGE/...),
+   # so the canvas has data without Databricks creds or VPN. api/worker/beat all wait
+   # on it, so exactly one process runs alembic.
+@@ -82,15 +64,15 @@
+     environment: *pyenv
+     volumes: *pymounts
+     depends_on:
+-      db:
+-        condition: service_healthy
++      dbinit:
++        condition: service_completed_successfully
+     command:
+       - bash
+       - -lc
+       - >
+         pip install --quiet -r requirements.txt && alembic upgrade head && python e2e/seed/adapter.py --fixtures e2e/seed/fixtures.json
+
+-    networks: [task-net]
++    networks: [task-net, sdev-shared]
+   redis:
+     image: redis:7-alpine
+     restart: unless-stopped
+@@ -109,19 +91,19 @@
+     ports:
+       - "127.0.0.1:${API_HOST_PORT}:8291"
+     depends_on:
+-      db:
+-        condition: service_healthy
+       redis:
+         condition: service_started
+       seed:
+         condition: service_completed_successfully
++      dbinit:
++        condition: service_completed_successfully
+     command:
+       - bash
+       - -lc
+       - >
+         pip install --quiet -r requirements.txt && uvicorn pdmt_chips_api.main:app --host 0.0.0.0 --port 8291 --reload
+
+-    networks: [task-net]
++    networks: [task-net, sdev-shared]
+   # TaskIQ replaced Celery: the broker is a Redis Stream, the task modules must be
+   # named on the command line, and the cron schedules are declared as task labels
+   # (see backend/src/pdmt_chips_api/core/taskiq_app.py). Keep this argv in step with
+@@ -140,13 +122,15 @@
+         condition: service_started
+       seed:
+         condition: service_completed_successfully
++      dbinit:
++        condition: service_completed_successfully
+     command:
+       - bash
+       - -lc
+       - >
+         pip install --quiet -r requirements.txt && taskiq worker pdmt_chips_api.core.taskiq_app:broker pdmt_chips_api.modules.bom_visualisation.tasks pdmt_chips_api.modules.chat.glossary.tasks
+
+-    networks: [task-net]
++    networks: [task-net, sdev-shared]
+   beat:
+     image: python:3.14
+     restart: unless-stopped
+@@ -161,13 +145,15 @@
+         condition: service_started
+       seed:
+         condition: service_completed_successfully
++      dbinit:
++        condition: service_completed_successfully
+     command:
+       - bash
+       - -lc
+       - >
+         pip install --quiet -r requirements.txt && taskiq scheduler pdmt_chips_api.core.taskiq_app:scheduler pdmt_chips_api.modules.bom_visualisation.tasks pdmt_chips_api.modules.chat.glossary.tasks
+
+-    networks: [task-net]
++    networks: [task-net, sdev-shared]
+   # UI dev server in-container (vite) — serves the SPA and proxies /pdmt-api ->
+   # api over the compose network. node_modules live in anonymous volumes because
+   # the host dirs hold darwin binaries and the container needs linux ones.
+@@ -201,8 +187,38 @@
+         cd /app/common && npm install && npm run build && cd /app/ui && npm install --no-package-lock && npm run dev
+
+     networks: [task-net]
++  dbinit:
++    image: ${SDEV_POSTGRES_IMAGE}
++    restart: "no"
++    entrypoint:
++      - sh
++      - -ec
++    command:
++      - |
++        #!/bin/sh
++        # One-shot workspace database creation. Run in pgvector/postgres, never on host.
++        set -eu
++        case "$$DB_NAME" in ''|*[!a-z0-9_]*) echo 'invalid DB_NAME' >&2; exit 1 ;; esac
++        [ "$${#DB_NAME}" -le 63 ] || { echo 'DB_NAME exceeds 63 bytes' >&2; exit 1; }
++        # One session holds the advisory lock through existence check + CREATE. This
++        # tolerates two dbinit containers starting for the same workspace concurrently.
++        exec psql -v ON_ERROR_STOP=1 -v "db=$$DB_NAME" <<'SQL'
++        SELECT pg_advisory_lock(hashtextextended(:'db', 0));
++        SELECT format('CREATE DATABASE %I', :'db')
++        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
++        SELECT pg_advisory_unlock(hashtextextended(:'db', 0));
++        SQL
++    environment:
++      PGHOST: ${DB_HOST}
++      PGPORT: "5432"
++      PGUSER: sdev
++      PGPASSWORD: sdev
++      PGDATABASE: postgres
++      PGCONNECT_TIMEOUT: "10"
++      DB_NAME: ${DB_NAME}
++    networks:
++      - sdev-shared
+ volumes:
+-  chips-postgres:
+   pip-cache:
+     external: true
+     name: sdev-pip-cache
+@@ -212,3 +228,6 @@
+ networks:
+   task-net:
+     driver: bridge
++  sdev-shared:
++    external: true
++    name: sdev-shared
+--- a/core/projects.d/pdmt.yml
++++ b/core/projects.d/pdmt.yml
+@@ -15,19 +15,19 @@
+ #   git -C projects/pdmt/<slug>/edm-apps-obs-pdmt-chips-ui submodule update --init
+ #   # or: cd projects/pdmt/<slug>/edm-apps-obs-pdmt-chips-ui && make bootstrap
+
+-conf_prefix: pdmt-chips-api          # -> confs/pdmt/pdmt-chips-api.<profile>.env (Databricks creds)
++conf_prefix: pdmt-chips-api # -> confs/pdmt/pdmt-chips-api.<profile>.env (Databricks creds)
+ default_shell_service: api
+ template: core/pdmt/docker-compose.tmpl
+-
+ # Host-exposed services that get a per-task port offset. 'nginx' is kept as the
+ # primary web-port SLOT (base 8080) so `sdev open` and the task URL keep working;
+ # the vite `ui` service publishes on ${NGINX_HOST_PORT}. api/db/redis are exposed
+ # for direct access.
+-stack_services: [nginx, api, db, redis]
+-
++stack_services: [nginx, api, redis]
+ repos:
+   chips:
+     path: edm-apps-obs-pdmt-chips-ui
+     default_base: develop
+     compose_role: app
+-    link_node_modules: false        # npm install runs in-container into anon volumes
++    link_node_modules: false # npm install runs in-container into anon volumes
++infra:
++  postgres: "18"
