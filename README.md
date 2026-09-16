@@ -275,3 +275,11 @@ sdev migrate --from /path/to/old/sdev-clone
 ## License
 
 [MIT](./LICENSE).
+
+## Shared Postgres infrastructure (opt-in)
+
+`sdev infra up|status|down [<flavor>]` manages a standing containerized Postgres
+server per version/pin, outside task workspaces. No shipped project opts in;
+custom templates and registries must adopt the shared database together. See
+[shared infrastructure](docs/shared-infra.md) for commands, data ownership,
+custom pins and the adoption contract.

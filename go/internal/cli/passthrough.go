@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/santhosh2011/sdev/internal/config"
+	"github.com/santhosh2011/sdev/internal/infra"
 	"github.com/santhosh2011/sdev/internal/paths"
 	"github.com/santhosh2011/sdev/internal/task"
 )
@@ -65,6 +66,13 @@ func Up(args []string) int {
 	if profile == "staging" && !confirmStaging(assumeYes) {
 		return failMsg("aborted (staging not confirmed)")
 	}
+	key, err := filepath.Rel(filepath.Join(home, "projects"), dir)
+	if err != nil {
+		return failErr(err)
+	}
+	if err := infra.Ensure(home, key, dir); err != nil {
+		return failErr(err)
+	}
 	return execCompose(dir, append([]string{"up", "-d"}, extra...)...)
 }
 
@@ -83,7 +91,23 @@ func Nuke(args []string) int {
 	if code != 0 {
 		return code
 	}
-	return execCompose(dir, "down", "-v", "--remove-orphans")
+	if !infra.Shared(dir) {
+		return execCompose(dir, "down", "-v", "--remove-orphans")
+	}
+	cmd := exec.Command("./compose", "down", "-v", "--remove-orphans")
+	cmd.Dir = dir
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return failErr(err)
+	}
+	key, err := filepath.Rel(filepath.Join(paths.Home(), "projects"), dir)
+	if err != nil {
+		return failErr(err)
+	}
+	if err := infra.Drop(paths.Home(), key); err != nil {
+		return failErr(err)
+	}
+	return 0
 }
 
 // Logs implements `sdev logs <slug> [--no-follow] [services...]`.

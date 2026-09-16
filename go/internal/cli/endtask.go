@@ -10,6 +10,7 @@ import (
 
 	"github.com/santhosh2011/sdev/internal/config"
 	"github.com/santhosh2011/sdev/internal/fsutil"
+	"github.com/santhosh2011/sdev/internal/infra"
 	"github.com/santhosh2011/sdev/internal/lock"
 	"github.com/santhosh2011/sdev/internal/paths"
 	"github.com/santhosh2011/sdev/internal/state"
@@ -63,6 +64,9 @@ func End(args []string) int {
 
 	// Tear down docker (best-effort; no-op without an executable ./compose).
 	teardownOps().Down(taskDir)
+	if err := infra.Drop(home, taskKey); err != nil {
+		return failErr(err)
+	}
 
 	repos := collectTaskRepos(home, project, taskDir)
 	finalSHAs := finalSHAs(taskDir, repos)

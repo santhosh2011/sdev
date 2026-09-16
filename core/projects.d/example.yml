@@ -3,11 +3,21 @@
 # with `sdev use <yourproject>`.
 
 # Env-profile conf prefix -> confs/<project>/<conf_prefix>.<profile>.env
-conf_prefix: app
 
+# Shared Postgres adoption is a later change; do not enable yet.
+# Future paired template/registry setting:
+# infra:
+#   postgres: "18"
+# See docs/shared-infra.md for the integration contract.
+# Env-profile conf prefix -> confs/<project>/<conf_prefix>.<profile>.env
+# Shared Postgres is optional; enable only with a paired shared template.
+# No bundled project is opted in. Example setting:
+# infra:
+#   postgres: "18"
+# See docs/shared-infra.md for the integration contract.
+conf_prefix: app
 # Service to exec into for `sdev shell` (a compose service name).
 default_shell_service: api
-
 # OPTIONAL: a project-specific compose template (relative to repo root).
 # Omit to use the default bin/templates/docker-compose.yml.tmpl.
 # template: core/example/docker-compose.tmpl

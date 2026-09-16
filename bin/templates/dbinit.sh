@@ -1,0 +1,13 @@
+#!/bin/sh
+# One-shot workspace database creation. Run in pgvector/postgres, never on host.
+set -eu
+case "$DB_NAME" in ''|*[!a-z0-9_]*) echo 'invalid DB_NAME' >&2; exit 1 ;; esac
+[ "${#DB_NAME}" -le 63 ] || { echo 'DB_NAME exceeds 63 bytes' >&2; exit 1; }
+# One session holds the advisory lock through existence check + CREATE. This
+# tolerates two dbinit containers starting for the same workspace concurrently.
+exec psql -v ON_ERROR_STOP=1 -v "db=$DB_NAME" <<'SQL'
+SELECT pg_advisory_lock(hashtextextended(:'db', 0));
+SELECT format('CREATE DATABASE %I', :'db')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
+SELECT pg_advisory_unlock(hashtextextended(:'db', 0));
+SQL

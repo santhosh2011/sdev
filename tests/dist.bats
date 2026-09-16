@@ -12,6 +12,9 @@ teardown() { rm -rf "$OUT"; }
   listing="$(unzip -Z1 "$zipfile")"
   echo "$listing" | grep -qx 'sdev/bin/sdev'
   echo "$listing" | grep -qx 'sdev/bin/_lib.sh'
+  for asset in bin/infra bin/infra-task bin/_infra.sh bin/templates/infra-postgres.yml.tmpl bin/templates/shared-postgres.yml.tmpl bin/templates/dbinit.sh docs/shared-infra.md; do
+    echo "$listing" | grep -qx "sdev/$asset"
+  done
   echo "$listing" | grep -qx 'sdev/install'
   echo "$listing" | grep -qx 'sdev/core/.task-config.yml'
   echo "$listing" | grep -qx 'sdev/core/projects.d/example.yml'

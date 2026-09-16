@@ -172,3 +172,36 @@ func seedLedger(t *testing.T, home, key string, task Task) {
 		t.Fatal(err)
 	}
 }
+
+func TestSharedInfraSurvivesTaskWritesAndReservesOffset(t *testing.T) {
+	home := t.TempDir()
+	if err := Init(home); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(FilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := InfraStack{Offset: 10, Image: "pgvector/pgvector:pg18", CreatedAt: "2026-09-16T00:00:00Z"}
+	l.SharedInfra["postgres-18"] = want
+	if err := Save(home, l); err != nil {
+		t.Fatal(err)
+	}
+	off, err := AllocateOffset(home, Reservation{Key: "demo/a"}, 10, alwaysDead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off != 20 {
+		t.Fatalf("offset %d, want 20", off)
+	}
+	if err := FreeTask(home, "demo/a"); err != nil {
+		t.Fatal(err)
+	}
+	l, err = Load(FilePath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.SharedInfra["postgres-18"]; got != want {
+		t.Fatalf("shared_infra changed: %#v", got)
+	}
+}

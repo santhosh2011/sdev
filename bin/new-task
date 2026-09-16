@@ -207,6 +207,8 @@ if config_uses_default_template "$PROJECT"; then
     fi
 fi
 
+infra_workspace_hook env "$PROJECT/$SLUG" >> "$TASK_DIR/.env"
+
 # node_modules — generic per-repo.
 for r in "${SELECTED[@]}"; do
     [[ "$(config_repo_attr "$PROJECT" "$r" link_node_modules)" == "true" ]] || continue

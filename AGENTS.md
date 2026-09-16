@@ -67,6 +67,10 @@ Implemented bash-only in `bin/core` (dispatched by `bin/sdev`'s `core)` case wit
 - **Persistent DB**: `up`/`refresh` use `compose up -d --build` with no `-v`, so the seeded DB survives every refresh. Reseed is opt-in only (`refresh --reseed` → `compose down -v` then re-boot + seed). `down` stops but keeps the volume + workspace; `down --destroy` is the full teardown (worktrees + volumes + `free_core_stack`).
 - **Migrate/seed hooks** are optional project config (`core.migrate` / `core.seed`), run verbatim through the stack's `./compose` wrapper; DB creds come from the stack env (`app.env`), never from sdev.
 
+## Shared Postgres foundation — `sdev infra`
+
+`bin/infra` and `bin/_infra.sh` own standing flavor-specific servers under `$SDEV_HOME/infra/`; see `docs/shared-infra.md` for lifecycle and the adoption contract. No project is opted in yet; `bin/infra-task` bridges snapshot-gated Bash/Go lifecycle hooks. Workspace files must never reference the provider's data volume. Consumer counts come from Docker, never a stored refcount. Go must preserve `shared_infra` on every ledger write and all allocators must skip its offsets. Tests: `tests/infra.bats`, `go/internal/state/writer_test.go`; opt-in engine proof: `tests/infra_live.sh`.
+
 ## Testing
 
 - Shared download-cache lifecycle lives in `bin/templates/compose.tmpl`; `tests/shared_caches.bats` covers provisioning and snapshot compatibility. Cache volumes are external; installed dependencies remain workspace-local (see README's stack configuration notes).

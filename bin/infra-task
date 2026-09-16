@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Internal bridge for Bash/Go workspace lifecycle. Accepts a ledger key, never
+# a database name. No direct user command; bin/infra owns the public interface.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+# shellcheck source=./_infra.sh
+source "$SCRIPT_DIR/_infra.sh"
+[[ $# == 2 ]] || die "infra-task requires an operation and ledger key"
+case "$1" in
+    env) with_state_lock infra_workspace_env_locked "$2" ;;
+    ensure) with_state_lock infra_ensure_workspace_locked "$2" ;;
+    drop) infra_drop_task_database "$2" ;;
+    *) die "unknown infra-task operation" ;;
+esac

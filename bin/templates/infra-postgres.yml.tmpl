@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: ${INFRA_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sdev
+      POSTGRES_PASSWORD: sdev
+      POSTGRES_DB: postgres
+    ports:
+      - 127.0.0.1:${PG_HOST_PORT}:5432
+    volumes:
+      - pgdata:${PG_DATA_TARGET}
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - -U
+        - sdev
+        - -d
+        - postgres
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    labels:
+      io.sdev.infra.flavor: ${INFRA_FLAVOR}
+      io.sdev.infra.home: ${SDEV_INFRA_HOME}
+    networks:
+      sdev-shared:
+        aliases:
+          - ${INFRA_ALIAS}
+volumes:
+  pgdata: {}
+networks:
+  sdev-shared:
+    external: true
+    name: sdev-shared

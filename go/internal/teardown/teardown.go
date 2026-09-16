@@ -12,6 +12,7 @@ import (
 
 	"github.com/santhosh2011/sdev/internal/config"
 	"github.com/santhosh2011/sdev/internal/fsutil"
+	"github.com/santhosh2011/sdev/internal/infra"
 	"github.com/santhosh2011/sdev/internal/lock"
 	"github.com/santhosh2011/sdev/internal/state"
 )
@@ -37,6 +38,9 @@ func Force(home, key string, ops Ops) error {
 
 	if fsutil.IsDir(dir) {
 		ops.Down(dir)
+		if err := infra.Drop(home, key); err != nil {
+			return err
+		}
 		repos, err := config.Repos(home, project)
 		if err != nil {
 			return err

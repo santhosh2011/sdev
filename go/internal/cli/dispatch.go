@@ -7,6 +7,8 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/santhosh2011/sdev/internal/config"
@@ -46,6 +48,8 @@ func Run(args []string) int {
 // (0, false) when cmd is not a recognized command.
 func dispatch(cmd string, sub []string) (int, bool) {
 	switch cmd {
+	case "infra":
+		return runInfra(sub), true
 	case "help", "-h", "--help":
 		usage()
 		return 0, true
@@ -136,4 +140,18 @@ func extractProjectFlag(args []string) (string, []string) {
 		}
 	}
 	return project, args[i:]
+}
+
+// Infrastructure lifecycle is bash-only; the native entrypoint delegates
+// directly rather than interpreting "infra" as an implicit task slug.
+func runInfra(args []string) int {
+	cmd := exec.Command(filepath.Join(paths.Install(), "bin", "infra"), args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return exit.ExitCode()
+		}
+		return failErr(err)
+	}
+	return 0
 }

@@ -39,6 +39,9 @@ func Save(home string, l *Ledger) error {
 	if l.CoreStacks == nil {
 		l.CoreStacks = map[string]CoreStack{}
 	}
+	if l.SharedInfra == nil {
+		l.SharedInfra = map[string]InfraStack{}
+	}
 	data, err := yaml.Marshal(l)
 	if err != nil {
 		return err
@@ -157,8 +160,8 @@ func reconcile(home string, l *Ledger, alive ProcAlive) {
 	}
 }
 
-// usedOffsets is the set of reserved offsets: ledger task offsets, core-stack
-// offsets (the reserved high band), and a fresh .env scan (belt-and-suspenders
+// usedOffsets is the set of reserved offsets: task, core-stack, shared-infra
+// offsets, and a fresh .env scan (belt-and-suspenders
 // against an on-disk task missing from the ledger).
 func usedOffsets(home string, l *Ledger) map[int]bool {
 	used := map[int]bool{}
@@ -167,6 +170,9 @@ func usedOffsets(home string, l *Ledger) map[int]bool {
 	}
 	for _, c := range l.CoreStacks {
 		used[c.Offset] = true
+	}
+	for _, infra := range l.SharedInfra {
+		used[infra.Offset] = true
 	}
 	for _, env := range LiveEnvPaths(home) {
 		if off := envOffset(env); off >= 0 {

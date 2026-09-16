@@ -78,6 +78,8 @@ if [[ -x "$TASK_DIR/compose" ]]; then
     ( cd "$TASK_DIR" && ./compose down -v --remove-orphans 2>/dev/null || true )
 fi
 
+infra_workspace_hook drop "$TASK_KEY"
+
 # Collect repos with worktrees (path -> repo name for pool metadata)
 declare -a TASK_REPOS=()
 declare -A REPO_NAME_BY_PATH=()
