@@ -37,7 +37,7 @@ SH
   echo "$output" | jq -e '.url == "http://localhost:8110/"' >/dev/null
 }
 
-# A fake docker-compose on PATH so `up` boots without a real docker engine.
+# Fake Docker and Compose so cache provisioning and `up` need no real engine.
 stub_compose() {
   mkdir -p "$WORKSPACE_ROOT/fakebin"
   cat > "$WORKSPACE_ROOT/fakebin/docker-compose" <<SH
@@ -45,7 +45,16 @@ stub_compose() {
 echo "FAKE \$*" >> "$WORKSPACE_ROOT/compose.log"
 exit 0
 SH
-  chmod +x "$WORKSPACE_ROOT/fakebin/docker-compose"
+  cat > "$WORKSPACE_ROOT/fakebin/docker" <<SH
+#!/usr/bin/env bash
+echo "DOCKER \$*" >> "$WORKSPACE_ROOT/compose.log"
+case "\$*" in
+  'volume inspect sdev-pip-cache'|'volume inspect sdev-npm-cache') exit 1 ;;
+  'volume create sdev-pip-cache'|'volume create sdev-npm-cache') exit 0 ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$WORKSPACE_ROOT/fakebin/docker-compose" "$WORKSPACE_ROOT/fakebin/docker"
   export PATH="$WORKSPACE_ROOT/fakebin:$PATH"
 }
 
@@ -67,6 +76,7 @@ YAML
   echo "$output" | jq -e '.task == "web/feat"' >/dev/null
   echo "$output" | jq -e '.url | startswith("http://localhost:")' >/dev/null
   [ -d "$WORKSPACE_ROOT/projects/web/feat" ]
+  grep -qx 'DOCKER volume create sdev-pip-cache' "$WORKSPACE_ROOT/compose.log"
   grep -q 'up -d' "$WORKSPACE_ROOT/compose.log"
 }
 
