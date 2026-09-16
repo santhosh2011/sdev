@@ -1,17 +1,13 @@
 name: CI
-
 on:
   push:
     branches: ["**"]
   pull_request:
-
 permissions:
   contents: read
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   shellcheck:
     name: shellcheck
@@ -30,9 +26,8 @@ jobs:
           shellcheck -x -S warning \
             bin/sdev bin/_lib.sh bin/init bin/new-task bin/end-task \
             bin/edit-project bin/list-tasks bin/migrate bin/doctor bin/prune \
-            bin/status bin/start bin/review bin/ship bin/core \
-            install install.sh self-update dist bootstrap
-
+            bin/status bin/start bin/review bin/ship bin/core bin/templates/compose.tmpl \
+            install install.sh self-update dist bootstrap artifacts/shared-infra/benchmark/run.sh
   go:
     name: go
     runs-on: ubuntu-latest
@@ -57,7 +52,6 @@ jobs:
       - name: go build
         working-directory: go
         run: go build -o /dev/null ./cmd/sdev
-
   test:
     name: bats (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -67,7 +61,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-
       - name: Install deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -79,12 +72,10 @@ jobs:
             "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
             -o /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
-
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
         # bash: macOS ships 3.2; the tool needs >= 4. bats-core + mikefarah yq.
         run: brew install bats-core yq bash jq
-
       - name: Show versions
         run: |
           echo "PATH=$PATH"
@@ -93,18 +84,15 @@ jobs:
           yq --version
           bats --version
           git --version
-
       - name: Verify yq is mikefarah v4
         run: |
           yq --version | grep -q mikefarah || { echo "wrong yq (need mikefarah)"; exit 1; }
           yq --version | grep -Eq 'version v?4' || { echo "need yq v4"; exit 1; }
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: false
       - name: Build sdev-go (ported commands)
         run: (cd go && go build -o ../bin/sdev-go ./cmd/sdev)
-
       - name: Run bats suite
         run: bats tests

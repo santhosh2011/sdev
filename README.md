@@ -99,6 +99,18 @@ runs, but `api`/`ui` are stubs until you point them at your images). Two knobs:
 Your repos need a Docker setup (image or `build:` context) matching those roles
 for `sdev up` to run your actual app.
 
+The default template shares pip's download cache (`sdev-pip-cache`, mounted at
+`/root/.cache/pip`) and npm's download cache (`sdev-npm-cache`, at `/root/.npm`)
+across workspaces and projects in the same Docker engine. The generated
+`./compose` wrapper creates these external volumes on `up`, `run`, or `create`.
+Workspace `down -v`, `end`, and `destroy` preserve them. Installed Python
+packages and `node_modules` remain local to each workspace. Custom templates
+can use the same external names and mounts; containers running as non-root
+must explicitly configure a writable cache location. Existing workspaces keep
+their template and wrapper snapshots. When bypassing `./compose`, create the
+external volumes once with `docker volume create sdev-pip-cache` and
+`docker volume create sdev-npm-cache` before starting Compose.
+
 ## Daily use
 
 | Command | What it does |

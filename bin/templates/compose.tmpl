@@ -7,6 +7,29 @@ if [[ -x "$HOME/.orbstack/bin/docker-compose" ]] && ! command -v docker-compose 
     export PATH="$HOME/.orbstack/bin:$PATH"
 fi
 
+# These are download caches, never installed dependencies. External ownership
+# keeps a workspace's `down -v` from deleting another workspace's warm cache.
+# Provision only on container creation, including `./compose --profile X up`.
+args=("$@")
+while [[ ${#args[@]} -gt 0 ]]; do
+    case "${args[0]}" in
+        --profile|--project-name|-p|--file|-f|--env-file|--project-directory|--parallel|--progress|--ansi)
+            args=("${args[@]:2}") ;;
+        -*) args=("${args[@]:1}") ;;
+        up|run|create)
+            for cache in pip npm; do
+                name="sdev-$cache-cache"
+                if CACHE="$cache-cache" NAME="$name" yq -e \
+                    '.volumes[strenv(CACHE)].external == true and .volumes[strenv(CACHE)].name == strenv(NAME)' \
+                    docker-compose.yml >/dev/null; then
+                    docker volume inspect "$name" >/dev/null 2>&1 || docker volume create "$name" >/dev/null
+                fi
+            done
+            break ;;
+        *) break ;;
+    esac
+done
+
 # OrbStack provides `docker-compose` (with dash) at v5+, not the `docker compose`
 # subcommand. Prefer the dashed form; fall back to subcommand if available.
 if command -v docker-compose >/dev/null 2>&1; then
