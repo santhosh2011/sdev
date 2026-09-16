@@ -49,6 +49,7 @@ Commands:
   down <slug>                     stop the stack (docker-compose down)
   nuke <slug>                     stop + reclaim volumes (down -v --remove-orphans)
   end <slug> [--pool] [flags…]    tear down + archive (or return worktree to pool)
+  infra <up|status|down> [<flavor>]   manage standing shared Postgres
   core [<project>] <up|refresh|status|down>   the project's standing core-<project> stack
   destroy <slug> [--force]        force-remove a task (worktree + offset + entry; no archive)
   prune [--apply] [--pool]        reclaim ephemeral/abandoned slots; --pool drains the warm pool
@@ -76,7 +77,7 @@ EOF
 # Subcommand keywords (reserved — slugs cannot collide).
 is_reserved() {
     case "$1" in
-        new|start|up|down|nuke|end|review|ship|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|core|init|edit|migrate|update|help|-h|--help) return 0 ;;
+        new|start|up|down|nuke|end|review|ship|destroy|prune|lease|release|hold|doctor|ls|list|ps|logs|shell|open|code|cd|use|projects|status|core|infra|init|edit|migrate|update|help|-h|--help) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -228,6 +229,9 @@ case "$CMD" in
     edit)
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/edit-project" "$@"
         ;;
+    infra)
+        exec "$SCRIPT_DIR/infra" "$@"
+        ;;
     core)
         # Bash-only (no Go port): the standing core-<project> stack lifecycle.
         exec env SDEV_PROJECT="$PROJECT" "$SCRIPT_DIR/core" "$@"
@@ -288,6 +292,7 @@ case "$CMD" in
             fi
         fi
 
+        infra_workspace_hook ensure "$(_state_key_from_env "$dir/.env")"
         cd "$dir"
         exec ./compose up -d "${extra[@]}"
         ;;
@@ -302,8 +307,8 @@ case "$CMD" in
         try_go nuke "$@"
         slug="${1:-}"; shift || true
         dir="$(require_task_dir "$slug")"
-        cd "$dir"
-        exec ./compose down -v --remove-orphans
+        ( cd "$dir" && ./compose down -v --remove-orphans )
+        infra_workspace_hook drop "$(_state_key_from_env "$dir/.env")"
         ;;
     ps)
         try_go ps "$@"

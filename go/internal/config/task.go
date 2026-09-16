@@ -17,6 +17,7 @@ var validProfiles = []string{"local", "dev", "staging"}
 // projectDoc is the subset of a project/global registry that task creation reads.
 // A project file and the global .task-config.yml share enough shape to reuse it.
 type projectDoc struct {
+	Infra               map[string]string         `yaml:"infra"`
 	ConfPrefix          string                    `yaml:"conf_prefix"`
 	Template            string                    `yaml:"template"`
 	StackServices       []string                  `yaml:"stack_services"`
@@ -184,4 +185,9 @@ func scalarString(v any) string {
 	default:
 		return fmt.Sprint(x)
 	}
+}
+
+// PostgresFlavor is opt-in only; absent preserves the workspace-local database.
+func PostgresFlavor(home, project string) string {
+	return readDoc(EffectiveProjectFile(home, project)).Infra["postgres"]
 }

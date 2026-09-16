@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# sdev infra — standing shared Postgres infrastructure, owned outside projects/.
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+# shellcheck source=./_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+# shellcheck source=./_infra.sh
+source "$SCRIPT_DIR/_infra.sh"
+
+usage() {
+    cat <<'HELP'
+Usage: sdev infra up [<flavor>] [--no-boot]
+       sdev infra status [<flavor>] [--json]
+       sdev infra down <flavor> [--destroy]
+
+Default up flavor: postgres-18 (18 is accepted as shorthand).
+Custom pins: defaults.infra_postgres_flavors.postgres-18-<pin>.image.
+Down refuses while any workspace is on sdev-shared. --destroy removes ALL
+flavor databases, requires typing the canonical flavor (or SDEV_CONFIRM),
+and never removes the external network. No project is opted in automatically.
+HELP
+}
+
+infra_status() {
+    local flavors="$1" flavor image offset rows consumers count databases error record result='[]'
+    [[ -n "$flavors" ]] || { [[ "$JSON" == 0 ]] || echo '[]'; return 0; }
+    consumers="$(infra_consumers)" || return
+    count="$(printf '%s\n' "$consumers" | awk 'NF {n++} END {print n+0}')"
+    while IFS= read -r flavor; do
+        [[ -n "$flavor" ]] || continue
+        offset="$(infra_entry "$flavor" offset)"
+        [[ -n "$offset" ]] || die "no reserved infra stack for $flavor"
+        image="$(infra_entry "$flavor" image)"
+        rows="$(docker ps --filter "label=com.docker.compose.project=sdev-infra-$flavor" --format '{{.Status}}')"
+        databases='null'; error=''
+        if [[ -n "$rows" ]]; then
+            if databases="$(infra_compose "$flavor" exec -T postgres psql -U sdev -d postgres -tAc "SELECT coalesce(json_agg(datname ORDER BY datname), '[]'::json) FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'" 2>/dev/null)"; then
+                :
+            else
+                databases='null'; error='database query failed'
+            fi
+        fi
+        record="$(F="$flavor" IMG="$image" OFF="$offset" COUNT="$count" DBS="$databases" STATUS="${rows:-stopped}" ERR="$error" yq -n -o=json -I=0 '{"flavor": strenv(F), "image": strenv(IMG), "offset": env(OFF), "port": (5432 + env(OFF)), "consumers": env(COUNT), "status": strenv(STATUS), "databases": env(DBS), "database_error": strenv(ERR)}')"
+        result="$(ROW="$record" yq -o=json -I=0 '. + [env(ROW)]' <<< "$result")"
+    done <<< "$flavors"
+    if [[ "$JSON" == 1 ]]; then
+        echo "$result"
+    else
+        yq -r '.[] | [.flavor, .image, (.port | tostring), (.consumers | tostring), .status, (.databases | to_json)] | @tsv' <<< "$result"
+    fi
+}
+
+VERB="${1:-help}"; [[ $# -eq 0 ]] || shift
+FLAVOR=''; DESTROY=0; JSON=0; INFRA_NO_BOOT=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --destroy) DESTROY=1 ;;
+        --json) JSON=1 ;;
+        --no-boot) INFRA_NO_BOOT=1 ;;
+        --help|-h) usage; exit 0 ;;
+        -*) die "unknown flag: $1" ;;
+        *) [[ -z "$FLAVOR" ]] || die "unexpected argument: $1"; FLAVOR="$(infra_flavor "$1")" ;;
+    esac
+    shift
+done
+case "$VERB" in
+    help|--help|-h) usage ;;
+    up)
+        [[ "$DESTROY" == 0 && "$JSON" == 0 ]] || die "invalid flags for up"
+        ensure_home
+        with_state_lock infra_up_locked "${FLAVOR:-postgres-18}"
+        ;;
+    status)
+        [[ "$DESTROY" == 0 && "$INFRA_NO_BOOT" == 0 ]] || die "invalid flags for status"
+        if [[ -z "$FLAVOR" && -f "$STATE_FILE" ]]; then
+            FLAVOR="$(yq -r '(.shared_infra // {}) | keys | .[]' "$STATE_FILE")"
+        fi
+        infra_status "$FLAVOR"
+        ;;
+    down)
+        [[ -n "$FLAVOR" ]] || die "down requires a flavor"
+        [[ "$JSON" == 0 && "$INFRA_NO_BOOT" == 0 ]] || die "invalid flags for down"
+        with_state_lock infra_down_locked "$FLAVOR" "$DESTROY"
+        ;;
+    *) usage; die "unknown infra verb: $VERB" ;;
+esac

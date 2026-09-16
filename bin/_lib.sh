@@ -444,6 +444,7 @@ pool_seq: 0
 tasks: {}
 pool: []
 core_stacks: {}
+shared_infra: {}
 YAML
 }
 
@@ -522,7 +523,8 @@ _allocate_offset_locked() {   # $1=key  $2=lease(0/1)  $3=holder  $4=ephemeral(0
         [[ -n "$o" ]] && scan+="$o"$'\n'
     done < <(_live_env_files)
     used="$( { yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null;
-               yq -r '.core_stacks[].offset' "$STATE_FILE" 2>/dev/null; printf '%s' "$scan"; } | sort -un )"
+               yq -r '.core_stacks[].offset' "$STATE_FILE" 2>/dev/null;
+               yq -r '.shared_infra[].offset' "$STATE_FILE" 2>/dev/null; printf '%s' "$scan"; } | sort -un )"
     candidate=$step
     while printf '%s\n' "$used" | grep -qx "$candidate"; do
         candidate=$((candidate + step))
@@ -546,18 +548,20 @@ free_task() { with_state_lock _free_task_locked "$@"; }
 # --- core-stack offsets -------------------------------------------------------
 # A project's standing "core-<project>" stack gets ONE reserved port offset from
 # a high band, distinct from the task allocator. It is allocated once and then
-# STABLE (bookmarkable URLs never shift across refreshes). Both allocators union
-# the other's offsets into `used`, so the two blocks never collide.
+# STABLE (bookmarkable URLs never shift across refreshes). All three allocators union
+# task, core and shared-infra offsets into `used`, so reservations never collide.
 
 # First free offset in the reserved core band (defaults.core_port_offset_base,
-# step port_step), skipping offsets already held by a core stack or a task.
+# step port_step), skipping core, task and shared-infra reservations and .env scans.
 _next_core_offset() {
     local base step used candidate
     base="$(global_get '.defaults.core_port_offset_base')"
     [[ -n "$base" && "$base" != "null" ]] || base=1000
     step="$(global_get '.defaults.port_step')"
     used="$( { yq -r '.core_stacks[].offset' "$STATE_FILE" 2>/dev/null;
-               yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null; } | sort -un )"
+               yq -r '.tasks[].offset' "$STATE_FILE" 2>/dev/null;
+               yq -r '.shared_infra[].offset' "$STATE_FILE" 2>/dev/null;
+               _scan_task_offsets; } | sort -un )"
     candidate=$base
     while printf '%s\n' "$used" | grep -qx "$candidate"; do candidate=$((candidate + step)); done
     echo "$candidate"
@@ -587,6 +591,40 @@ _free_core_stack_locked() { state_init; P="$1" yq -i 'del(.core_stacks[strenv(P)
 # free_core_stack PROJECT — drop a core stack's reserved offset from the ledger.
 free_core_stack() { with_state_lock _free_core_stack_locked "$@"; }
 
+# --- shared infrastructure offsets (caller holds the state lock) --------------
+_scan_task_offsets() {
+    local env
+    while IFS= read -r env; do
+        grep '^PORT_OFFSET=' "$env" | head -1 | cut -d= -f2 || true
+    done < <(_live_env_files)
+}
+
+_allocate_infra_offset_locked() {   # $1=canonical flavor $2=image
+    state_init || return
+    local existing base step used candidate
+    existing="$(F="$1" yq -r '.shared_infra[strenv(F)].offset // ""' "$STATE_FILE")" || return
+    [[ -n "$existing" ]] && { echo "$existing"; return; }
+    base="$(global_get '.defaults.infra_port_offset_base // 2000')" || return
+    step="$(global_get '.defaults.port_step // 10')" || return
+    [[ "$base" =~ ^[1-9][0-9]*$ && "$step" =~ ^[1-9][0-9]*$ ]] || die "invalid infra offset band"
+    (( base > 0 && step > 0 )) || die "infra offset base and step must be positive"
+    used="$(yq -r '.tasks[].offset, .core_stacks[].offset, .shared_infra[].offset' "$STATE_FILE")" || return
+    used="$( { printf '%s\n' "$used"; _scan_task_offsets; } | sort -un )" || return
+    candidate=$base
+    while printf '%s\n' "$used" | grep -qx "$candidate"; do candidate=$((candidate + step)); done
+    (( 5432 + candidate <= 65535 )) || die "infra port band exhausted"
+    F="$1" OFF="$candidate" IMG="$2" TS="$(_now)" yq -i '
+      .shared_infra[strenv(F)] = {"offset": (strenv(OFF)|tonumber), "image": strenv(IMG), "created_at": strenv(TS)}' "$STATE_FILE" || return
+    echo "$candidate"
+}
+allocate_infra_offset() { with_state_lock _allocate_infra_offset_locked "$@"; }
+
+_free_infra_stack_locked() {
+    state_init || return
+    F="$1" yq -i 'del(.shared_infra[strenv(F)])' "$STATE_FILE"
+}
+free_infra_stack() { with_state_lock _free_infra_stack_locked "$@"; }
+
 # Force-tear-down a task with NO archive, NO pool, NO pre-flight: stop its docker
 # stack, remove each repo worktree, delete its task/<slug> branches, drop the
 # whole task dir, and free its ledger entry (offset + lease + lock). Used by
@@ -602,6 +640,7 @@ force_teardown_task() {   # $1=key
         if [[ -x "$dir/compose" ]]; then
             ( cd "$dir" && ./compose down -v --remove-orphans >/dev/null 2>&1 || true )
         fi
+        infra_workspace_hook drop "$key" || return
         local r rp src
         while IFS= read -r r; do
             [[ -n "$r" ]] || continue
@@ -761,3 +800,18 @@ add_repo_source() {   # $1=project $2=name $3=source_spec
 
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "[$(basename "$0")] $*"; }
+
+# Shared-Postgres adoption is snapshot-gated. Registry changes never redirect
+# an old local-database workspace. Bash and native Go call the same bridge.
+infra_workspace_hook() {   # action, ledger key (or @core/project)
+    local action="$1" key="$2" project dir configured
+    project="${key%%/*}"; dir="$SDEV_HOME/projects/$key"
+    if [[ "$key" == @core/* ]]; then project="${key#@core/}"; dir="$SDEV_HOME/stacks/$project"; fi
+    if [[ "$action" == env ]]; then
+        configured="$(yq -r '.infra.postgres // ""' "$(effective_project_file "$project")")" || return
+        [[ -n "$configured" ]] || return 0
+    else
+        grep -q '^SDEV_POSTGRES_FLAVOR=.' "$dir/.env" 2>/dev/null || return 0
+    fi
+    "$SDEV_INSTALL/bin/infra-task" "$action" "$key"
+}

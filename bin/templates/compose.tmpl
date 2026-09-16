@@ -21,7 +21,7 @@ while [[ ${#args[@]} -gt 0 ]]; do
                 name="sdev-$cache-cache"
                 if CACHE="$cache-cache" NAME="$name" yq -e \
                     '.volumes[strenv(CACHE)].external == true and .volumes[strenv(CACHE)].name == strenv(NAME)' \
-                    docker-compose.yml >/dev/null; then
+                    docker-compose.yml >/dev/null 2>&1; then
                     docker volume inspect "$name" >/dev/null 2>&1 || docker volume create "$name" >/dev/null
                 fi
             done

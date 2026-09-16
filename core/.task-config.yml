@@ -10,14 +10,12 @@ repos:
     path: web
     default_base: main
     compose_role: ui
-
 stack_services:
   - nginx
   - api
   - ui
   - db
   - redis
-
 defaults:
   default_env: local
   default_project: default
@@ -27,7 +25,8 @@ defaults:
   core_port_offset_base: 1000
   base_ports:
     nginx: 8080
-    api:   8000
-    ui:    5173
-    db:    5432
+    api: 8000
+    ui: 5173
+    db: 5432
     redis: 6379
+  infra_port_offset_base: 2000

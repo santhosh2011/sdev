@@ -9,6 +9,7 @@ import (
 
 	"github.com/santhosh2011/sdev/internal/config"
 	"github.com/santhosh2011/sdev/internal/fsutil"
+	"github.com/santhosh2011/sdev/internal/infra"
 	"github.com/santhosh2011/sdev/internal/paths"
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,9 @@ func writeTaskFiles(home, project, slug, profile string, offset int, selected []
 		return err
 	}
 	if err := applyDefaultTemplate(home, project, selected, taskDir); err != nil {
+		return err
+	}
+	if err := infra.WriteEnv(home, project, project+"/"+slug, taskDir); err != nil {
 		return err
 	}
 	linkNodeModules(home, project, selected, taskDir)

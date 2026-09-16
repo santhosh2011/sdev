@@ -111,7 +111,7 @@ core_write_compose() {   # $@=repos
     cp "$(config_template "$PROJECT")" "$STACK_DIR/docker-compose.yml"
     cp "$SCRIPT_DIR/templates/compose.tmpl" "$STACK_DIR/compose"
     chmod +x "$STACK_DIR/compose"
-    config_uses_default_template "$PROJECT" && core_prune_default_services "$@"
+    if config_uses_default_template "$PROJECT"; then core_prune_default_services "$@"; fi
 }
 
 core_scaffold_rollback() {
@@ -127,14 +127,16 @@ core_scaffold() {
     mkdir -p "$STACK_DIR"; trap 'core_scaffold_rollback' ERR
     core_add_worktrees "${repos[@]}"
     local offset; offset="$(allocate_core_offset "$PROJECT" "$(core_base_for_repo "${repos[0]}")")"
-    core_write_env "$offset"; core_write_compose "${repos[@]}"; touch "$STACK_DIR/.sdev-core"
+    core_write_env "$offset"; core_write_compose "${repos[@]}"
+    infra_workspace_hook env "@core/$PROJECT" >> "$STACK_DIR/.env"
+    touch "$STACK_DIR/.sdev-core"
     trap - ERR
     log "core stack scaffolded: stacks/$PROJECT (stack=core-$PROJECT, offset=$offset)"
 }
 
 # ---- boot / hooks / reporting ------------------------------------------------
 
-core_boot() { ( cd "$STACK_DIR" && ./compose up -d --build ); }
+core_boot() { infra_workspace_hook ensure "@core/$PROJECT"; ( cd "$STACK_DIR" && ./compose up -d --build ); }
 
 # Run an optional project hook (seed|migrate) through the stack's compose wrapper.
 core_run_hook() {   # $1=hook
@@ -208,6 +210,7 @@ core_refresh() {
     core_advance "${repos[@]}"
     [[ $NO_BOOT -eq 1 ]] && { log "refreshed source (--no-boot)"; return; }
     [[ $RESEED -eq 1 ]] && ( cd "$STACK_DIR" && ./compose down -v >/dev/null 2>&1 || true )
+    [[ $RESEED -eq 0 ]] || infra_workspace_hook drop "@core/$PROJECT"
     core_boot
     [[ $RESEED -eq 1 ]] && core_run_hook seed
     core_run_hook migrate
@@ -245,6 +248,7 @@ core_status() {
 
 core_destroy() {
     ( cd "$STACK_DIR" && ./compose down -v --remove-orphans >/dev/null 2>&1 || true )
+    infra_workspace_hook drop "@core/$PROJECT"
     core_remove_worktrees
     rm -rf "${STACK_DIR:?}"
     free_core_stack "$PROJECT"
@@ -256,6 +260,7 @@ core_down() {
     [[ $DESTROY -eq 1 ]] && { core_destroy; return; }
     local dv=(); [[ $VOLUMES -eq 1 ]] && dv=(-v --remove-orphans)
     ( cd "$STACK_DIR" && ./compose down "${dv[@]}" )
+    [[ $VOLUMES -eq 0 ]] || infra_workspace_hook drop "@core/$PROJECT"
     log "core-$PROJECT stopped"
 }
 

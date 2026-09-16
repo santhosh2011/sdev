@@ -184,7 +184,7 @@ if [[ "$SRC_DIR" == "$INSTALL_DIR" ]]; then
     say "✓ tool already at $INSTALL_DIR (running from install dir; skipping copy)"
 else
     mkdir -p "$INSTALL_DIR"
-    for item in bin core README.md LICENSE VERSION confs install install.sh self-update claude; do
+    for item in bin core README.md LICENSE VERSION confs install install.sh self-update claude docs; do
         [[ -e "$SRC_DIR/$item" ]] || continue
         rm -rf "${INSTALL_DIR:?}/$item"
         cp -R "$SRC_DIR/$item" "$INSTALL_DIR/$item"

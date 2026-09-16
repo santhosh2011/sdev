@@ -26,8 +26,8 @@ jobs:
           shellcheck -x -S warning \
             bin/sdev bin/_lib.sh bin/init bin/new-task bin/end-task \
             bin/edit-project bin/list-tasks bin/migrate bin/doctor bin/prune \
-            bin/status bin/start bin/review bin/ship bin/core bin/templates/compose.tmpl \
-            install install.sh self-update dist bootstrap artifacts/shared-infra/benchmark/run.sh
+            bin/status bin/start bin/review bin/ship bin/core bin/infra bin/infra-task bin/_infra.sh bin/templates/dbinit.sh bin/templates/compose.tmpl \
+            install install.sh self-update dist bootstrap artifacts/shared-infra/benchmark/run.sh tests/infra_live.sh
   go:
     name: go
     runs-on: ubuntu-latest

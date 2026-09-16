@@ -44,14 +44,23 @@ type CoreStack struct {
 	Base      string `yaml:"base"`
 }
 
+// InfraStack is managed by bash's bin/infra. It MUST round-trip through every
+// Go ledger write; dropping it loses stable ports and can cause collisions.
+type InfraStack struct {
+	Offset    int    `yaml:"offset"`
+	Image     string `yaml:"image"`
+	CreatedAt string `yaml:"created_at"`
+}
+
 // Ledger is the whole state file.
 type Ledger struct {
-	Version    int                  `yaml:"version"`
-	Seeded     bool                 `yaml:"seeded"`
-	PoolSeq    int                  `yaml:"pool_seq"`
-	Tasks      map[string]Task      `yaml:"tasks"`
-	Pool       []PoolEntry          `yaml:"pool"`
-	CoreStacks map[string]CoreStack `yaml:"core_stacks"`
+	Version     int                   `yaml:"version"`
+	Seeded      bool                  `yaml:"seeded"`
+	PoolSeq     int                   `yaml:"pool_seq"`
+	Tasks       map[string]Task       `yaml:"tasks"`
+	Pool        []PoolEntry           `yaml:"pool"`
+	CoreStacks  map[string]CoreStack  `yaml:"core_stacks"`
+	SharedInfra map[string]InfraStack `yaml:"shared_infra"`
 }
 
 // ProcAlive reports whether a process-lock is live; injected so callers test
@@ -77,6 +86,9 @@ func Load(path string) (*Ledger, error) {
 	}
 	if l.CoreStacks == nil {
 		l.CoreStacks = map[string]CoreStack{}
+	}
+	if l.SharedInfra == nil {
+		l.SharedInfra = map[string]InfraStack{}
 	}
 	return &l, nil
 }

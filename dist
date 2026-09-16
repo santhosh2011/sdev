@@ -39,6 +39,9 @@ done
 for f in README.md LICENSE; do
     [[ -f "$REPO_DIR/$f" ]] && cp "$REPO_DIR/$f" "$PKG/$f"
 done
+# Reference docs linked by the shipped README.
+mkdir -p "$PKG/docs"
+cp "$REPO_DIR/docs/shared-infra.md" "$PKG/docs/shared-infra.md"
 # Ship a clean, bare VERSION (no release-please annotation) to end users.
 printf '%s\n' "$VERSION" > "$PKG/VERSION"
 
