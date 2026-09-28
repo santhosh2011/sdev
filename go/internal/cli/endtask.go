@@ -25,6 +25,7 @@ type endArgs struct {
 	force       bool
 	keepBranch  bool
 	mergeTarget string
+	workBranch  string
 	pool        bool
 }
 
@@ -57,7 +58,7 @@ func End(args []string) int {
 	}
 
 	if !a.force {
-		if code := endPreflight(taskDir, a); code != 0 {
+		if code := endPreflight(home, project, taskDir, a); code != 0 {
 			return code
 		}
 	}
@@ -86,21 +87,28 @@ func End(args []string) int {
 }
 
 func parseEndArgs(args []string) (endArgs, int, bool) {
-	a := endArgs{mergeTarget: "origin/qa"}
+	a := endArgs{}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>] [--pool]")
+			fmt.Println("Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>] [--work-branch <branch>] [--pool]")
+			fmt.Println("Checks checked-out HEAD (including detached HEAD); --work-branch also checks a named local branch. Both must be landed.")
+			fmt.Println("Target defaults to each repo's configured default_base; accepts a bare branch (on origin) or remote/branch.")
+			fmt.Println("Fetches the target before checking ancestry; fetch failure refuses teardown. Squash/rebase merges may require separate review of rewritten commits.")
 			return a, 0, true
 		case "--force":
 			a.force = true
 		case "--keep-branch":
 			a.keepBranch = true
-		case "--merge-target":
-			if i+1 >= len(args) {
-				return a, failMsg("--merge-target requires a value"), true
+		case "--merge-target", "--work-branch":
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "--") {
+				return a, failMsg(args[i] + " requires a value"), true
 			}
-			a.mergeTarget = args[i+1]
+			if args[i] == "--merge-target" {
+				a.mergeTarget = args[i+1]
+			} else {
+				a.workBranch = args[i+1]
+			}
 			i++
 		case "--pool":
 			a.pool = true
@@ -132,21 +140,32 @@ func resolveEndDir(home, project, slug string) (string, bool) {
 
 // endPreflight enforces the non-force safety gate: every repo branch merged into
 // the merge target, every worktree clean, and no containers still running.
-func endPreflight(taskDir string, a endArgs) int {
-	entries, _ := os.ReadDir(taskDir)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+func endPreflight(home, project, taskDir string, a endArgs) int {
+	names, err := config.Repos(home, project)
+	if err != nil {
+		return failErr(err)
+	}
+	if len(names) == 0 {
+		return failMsg("no project repos configured - refusing teardown")
+	}
+	for _, name := range names {
+		path, err := config.RepoPath(home, project, name)
+		if err != nil {
+			return failErr(err)
 		}
-		repo := filepath.Join(taskDir, e.Name())
+		repo := filepath.Join(taskDir, path)
 		if !hasGitRepo(repo) {
 			continue
 		}
-		if !branchContained(repo, "task/"+a.slug, a.mergeTarget) {
-			return failMsg(fmt.Sprintf("%s: branch task/%s not in %s - pass --force to override", e.Name(), a.slug, a.mergeTarget))
+		target := a.mergeTarget
+		if target == "" {
+			target = config.RepoBase(home, project, name)
+		}
+		if err := checkEndLanded(repo, target, a.workBranch); err != nil {
+			return failMsg(fmt.Sprintf("%s: %v", name, err))
 		}
 		if out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").Output(); len(strings.TrimSpace(string(out))) > 0 {
-			return failMsg(fmt.Sprintf("%s: working tree dirty - pass --force to override", e.Name()))
+			return failMsg(fmt.Sprintf("%s: working tree dirty - pass --force to override", name))
 		}
 	}
 	cpn := readEnvValue(taskDir, "COMPOSE_PROJECT_NAME")
@@ -159,18 +178,43 @@ func endPreflight(taskDir string, a endArgs) int {
 	return 0
 }
 
-// branchContained reports whether branch is contained in the given remote target.
-func branchContained(repo, branch, target string) bool {
-	out, err := exec.Command("git", "-C", repo, "branch", "-r", "--contains", branch).Output()
-	if err != nil {
-		return false
+// checkEndLanded checks the worktree's actual tip, never its setup branch.
+// A named work branch is additional evidence, not permission to discard HEAD.
+func checkEndLanded(repo, target, workBranch string) error {
+	if target == "" || target == "null" {
+		return fmt.Errorf("no default_base configured - specify --merge-target")
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == target {
-			return true
+	remote, branch := "origin", target
+	if prefix, rest, ok := strings.Cut(target, "/"); ok {
+		if exec.Command("git", "-C", repo, "remote", "get-url", prefix).Run() == nil {
+			remote, branch = prefix, rest
 		}
 	}
-	return false
+	if exec.Command("git", "check-ref-format", "refs/heads/"+branch).Run() != nil {
+		return fmt.Errorf("invalid merge target %q", target)
+	}
+	targetRef := "refs/remotes/" + remote + "/" + branch
+	if err := runGit(repo, "fetch", "--quiet", "--no-tags", remote, "+refs/heads/"+branch+":"+targetRef); err != nil {
+		return fmt.Errorf("cannot fetch %s/%s - refusing teardown", remote, branch)
+	}
+	refs := []string{"HEAD"}
+	if workBranch != "" {
+		refs = append(refs, "refs/heads/"+workBranch)
+	}
+	for _, ref := range refs {
+		label := ref
+		if ref == "HEAD" {
+			name, err := exec.Command("git", "-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+			label = "HEAD (detached)"
+			if err == nil {
+				label = "HEAD (" + strings.TrimSpace(string(name)) + ")"
+			}
+		}
+		if exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", ref, targetRef).Run() != nil {
+			return fmt.Errorf("%s not in %s/%s - pass --force to override", label, remote, branch)
+		}
+	}
+	return nil
 }
 
 // collectTaskRepos returns the project repos that have a worktree in the task dir.
@@ -275,7 +319,11 @@ func archiveInfo(a endArgs, offset string, repos []taskRepo, finalSHAs map[strin
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Archive: %s\n\n", a.slug)
 	fmt.Fprintf(&b, "- archive_date: %s\n", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
-	fmt.Fprintf(&b, "- merge_target: %s\n", a.mergeTarget)
+	target := a.mergeTarget
+	if target == "" {
+		target = "per-repo default_base"
+	}
+	fmt.Fprintf(&b, "- merge_target: %s\n", target)
 	fmt.Fprintf(&b, "- port_offset_freed: %s\n", offset)
 	if len(pooled) > 0 {
 		fmt.Fprintf(&b, "- pooled_worktrees: %s\n", strings.Join(pooled, " "))

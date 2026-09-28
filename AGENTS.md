@@ -73,6 +73,7 @@ Implemented bash-only in `bin/core` (dispatched by `bin/sdev`'s `core)` case wit
 
 ## Testing
 
+- `sdev end` has matching Bash and Go guards (`bin/end-task`, `go/internal/cli/endtask.go`); keep both in sync. `tests/endtask.bats` exercises actual workspace HEAD versus fresh remote ancestry, including landed/unlanded work on a branch different from `task/<slug>`. Run with and without `bin/sdev-go` to cover both paths.
 - Shared download-cache lifecycle lives in `bin/templates/compose.tmpl`; `tests/shared_caches.bats` covers provisioning and snapshot compatibility. Cache volumes are external; installed dependencies remain workspace-local (see README's stack configuration notes).
 - `bats tests/` — all tests use `tests/helpers.bash::make_fixture` (isolated `WORKSPACE_ROOT`). `make_source_repo` builds a source git repo. New bin scripts must be added to the `cp` list in `make_fixture` (that's how `doctor` got shipped into the fixture).
 - Concurrency is tested both end-to-end (two real `sdev new`) and by stressing `allocate_offset` in parallel subshells.

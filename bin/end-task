@@ -10,9 +10,16 @@ PROJECT="$(require_project "$(resolve_project "${SDEV_PROJECT:-}")")"
 
 usage() {
     cat <<EOF
-Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>] [--pool]
+Usage: end-task <slug> [--force] [--keep-branch] [--merge-target <branch>] [--work-branch <branch>] [--pool]
 
 Tears down a task: stops docker, removes worktrees, deletes branches, archives knowledge.
+
+Checks the checked-out HEAD (including detached HEAD) in each repo. Use
+--work-branch to also check a named local branch when work is no longer checked
+out. Both must be landed. The target defaults to each repo's configured
+default_base; --merge-target accepts a bare branch (on origin) or remote/branch.
+The target is fetched before checking commit ancestry; fetch failure refuses
+teardown. Squash/rebase merges may require separate review of rewritten commits.
 
 --pool returns each repo worktree to the warm pool instead of deleting it: the
 tree is reset clean (gitignored deps/build caches kept) and relocated under
@@ -21,13 +28,16 @@ is freed either way.
 EOF
 }
 
-SLUG=""; FORCE=0; KEEP_BRANCH=0; MERGE_TARGET="origin/qa"; POOL=0
+SLUG=""; FORCE=0; KEEP_BRANCH=0; MERGE_TARGET=""; WORK_BRANCH=""; POOL=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --force) FORCE=1; shift ;;
         --keep-branch) KEEP_BRANCH=1; shift ;;
-        --merge-target) MERGE_TARGET="$2"; shift 2 ;;
+        --merge-target|--work-branch)
+            [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 requires a value"
+            if [[ "$1" == --merge-target ]]; then MERGE_TARGET="$2"; else WORK_BRANCH="$2"; fi
+            shift 2 ;;
         --pool) POOL=1; shift ;;
         *) [[ -z "$SLUG" ]] && SLUG="$1" || die "unexpected arg: $1"; shift ;;
     esac
@@ -53,18 +63,37 @@ fi
 
 # Pre-flight (skip if --force)
 if [[ $FORCE -eq 0 ]]; then
-    for repo in "$TASK_DIR"/*/; do
-        repo_name="$(basename "$repo")"
+    repo_names="$(config_repos "$PROJECT")" || die "cannot read project repos — refusing teardown"
+    [[ -n "$repo_names" ]] || die "no project repos configured — refusing teardown"
+    while read -r repo_name; do
+        repo="$TASK_DIR/$(config_repo_path "$PROJECT" "$repo_name")"
         [[ -d "$repo/.git" || -f "$repo/.git" ]] || continue
-        # Branch merged into target?
-        if ! git -C "$repo" branch -r --contains "task/$SLUG" 2>/dev/null | grep -qE "^\s*$MERGE_TARGET\$"; then
-            die "$repo_name: branch task/$SLUG not in $MERGE_TARGET — pass --force to override"
+        target="${MERGE_TARGET:-$(config_repo_base "$PROJECT" "$repo_name")}"
+        [[ -n "$target" && "$target" != null ]] || die "$repo_name: no default_base configured — specify --merge-target"
+        remote=origin; target_branch="$target"
+        if [[ "$target" == */* ]] && git -C "$repo" remote get-url "${target%%/*}" >/dev/null 2>&1; then
+            remote="${target%%/*}"; target_branch="${target#*/}"
         fi
+        target_ref="refs/remotes/$remote/$target_branch"
+        git check-ref-format "refs/heads/$target_branch" >/dev/null 2>&1 || die "$repo_name: invalid merge target '$target'"
+        # An explicit refspec updates the exact ref even with a narrow fetch config.
+        git -C "$repo" fetch --quiet --no-tags "$remote" "+refs/heads/$target_branch:$target_ref" || die "$repo_name: cannot fetch $remote/$target_branch — refusing teardown"
+        work_refs=(HEAD)
+        [[ -z "$WORK_BRANCH" ]] || work_refs+=("refs/heads/$WORK_BRANCH")
+        for work_ref in "${work_refs[@]}"; do
+            work_label="$work_ref"
+            if [[ "$work_ref" == HEAD ]]; then
+                work_label="HEAD ($(git -C "$repo" symbolic-ref --quiet --short HEAD || echo detached))"
+            fi
+            if ! git -C "$repo" merge-base --is-ancestor "$work_ref" "$target_ref"; then
+                die "$repo_name: $work_label not in $remote/$target_branch — pass --force to override"
+            fi
+        done
         # Clean tree?
         if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
             die "$repo_name: working tree dirty — pass --force to override"
         fi
-    done
+    done <<< "$repo_names"
     # Running containers?
     cpn="$(grep '^COMPOSE_PROJECT_NAME=' "$TASK_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "$SLUG")"
     running="$(docker ps --filter "label=com.docker.compose.project=$cpn" -q 2>/dev/null || true)"
@@ -146,7 +175,7 @@ offset="$(grep '^PORT_OFFSET=' "$ARCHIVE/.env" 2>/dev/null | cut -d= -f2 || echo
     echo "# Archive: $SLUG"
     echo ""
     echo "- archive_date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "- merge_target: $MERGE_TARGET"
+    echo "- merge_target: ${MERGE_TARGET:-per-repo default_base}"
     echo "- port_offset_freed: $offset"
     [[ ${#POOLED[@]} -gt 0 ]] && echo "- pooled_worktrees: ${POOLED[*]}"
     echo ""
